@@ -3,13 +3,9 @@ import {
   ArrowRight,
   BookmarkCheck,
   Check,
-  ChefHat,
-  Clock,
   Plus,
   RefreshCw,
-  Scale,
   Trash2,
-  Utensils,
   X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -22,181 +18,122 @@ import { Footer } from '@/components/layout/Footer'
 import { getFoodImage } from '@/lib/foodImages'
 import type { MealPlan } from '@/types/database'
 
-interface MealNutrientBreakdown {
+interface ServingGuidance {
   portion: string
   howMuchToEat: string
-  timing: string
-  proteinSource: string
-  carbsSource: string
-  fatSource: string
-  fiberAndMicros: string
-  prepTip: string
-  pairing: string
 }
 
-function getMealNutrientBreakdown(
+function getServingAndPortionGuidance(
   foodName: string,
   mealType: string,
   calories: number,
-  protein: number,
-  carbs: number,
-  fat: number
-): MealNutrientBreakdown {
+  protein: number
+): ServingGuidance {
   const name = foodName.toLowerCase()
   const type = mealType.toLowerCase()
 
-  const timing =
-    type === 'breakfast'
-      ? 'Breakfast · 7:30 AM – 9:30 AM'
-      : type === 'lunch'
-      ? 'Lunch · 12:30 PM – 2:30 PM'
-      : type === 'dinner'
-      ? 'Dinner · 7:30 PM – 9:30 PM'
-      : 'Snack · 4:30 PM – 5:30 PM'
+  // 1. Tofu / Soy / Vegan scramble (check before eggs or toast)
+  if (name.includes('tofu') || name.includes('soya') || name.includes('soy')) {
+    return {
+      portion: '150g scrambled tofu + 2 slices whole wheat toast',
+      howMuchToEat: `Eat this portion. Rich in complete plant-based protein with healthy fats, keeping you energetic and full for hours.`
+    }
+  }
 
-  // 1. Chilla / Savory Pancakes / Dosa
+  // 2. Chilla / Savory Pancakes / Cheela
   if (name.includes('chilla') || name.includes('cheela') || name.includes('pancake')) {
     const hasPaneer = name.includes('paneer')
     return {
       portion: hasPaneer ? '2 medium chillas (~220g) topped with 50g grated paneer' : '2 medium chillas (~200g)',
-      howMuchToEat: 'Eat 2 medium pieces. This gives you high morning satiety, replenishing amino acid reserves without causing digestive heaviness.',
-      timing,
-      proteinSource: hasPaneer
-        ? 'Gram flour (besan) + grated low-fat paneer provide complete branched-chain amino acids (BCAAs) to prevent muscle breakdown and sustain satiety.'
-        : 'Plant-based protein from nutrient-dense chickpea / gram flour (besan) supplying clean plant amino acids.',
-      carbsSource: 'Slow-burning complex carbs from pulse flour that break down steadily into bloodstream glucose with zero sugar spikes.',
-      fatSource: 'Healthy unsaturated lipids from paneer and light cooking oil (preferably cold-pressed or olive oil) supporting hormone balance.',
-      fiberAndMicros: 'High in dietary fiber (~5g), folate, iron, magnesium, and restorative plant polyphenols.',
-      prepTip: 'Cook in a non-stick or cast-iron pan using 1 tsp cold-pressed oil or A2 ghee. Fold in chopped onions, coriander, and green chilies for extra flavor.',
-      pairing: 'Pair with 2 tbsp homemade mint-coriander chutney or 1 cup fresh spiced buttermilk (chaas).'
+      howMuchToEat: 'Eat 2 medium pieces. This gives you high morning satiety with slow-digesting carbs and protein.'
     }
   }
 
-  // 2. Paneer dishes (Paneer Bhurji, Tikka, Curry, Palak Paneer)
+  // 3. Paneer dishes (Paneer Bhurji, Tikka, Curry, Palak Paneer)
   if (name.includes('paneer')) {
     return {
-      portion: '1 medium bowl (~180g) with 2 whole wheat phulkas or 1 cup brown rice',
-      howMuchToEat: 'Eat a 180g bowl portion. Gives an abundant protein boost without overburdening the digestive tract.',
-      timing,
-      proteinSource: 'Slow-digesting dairy casein protein from fresh cottage cheese (paneer), ensuring hours of continuous amino acid release.',
-      carbsSource: 'Naturally low carb density; carbohydrates come from accompanying whole grains (rotis), sautéed onions, and antioxidant-rich tomatoes.',
-      fatSource: 'Wholesome dairy lipids that aid the absorption of fat-soluble vitamins (A, D, E, and K) and promote hormonal balance.',
-      fiberAndMicros: 'High in bioavailable calcium, phosphorus, conjugated linoleic acid (CLA), and digestive spices.',
-      prepTip: 'Avoid deep frying paneer. Use pan-searing or add cubes directly into simmering tomato-onion gravy for soft texture.',
-      pairing: 'Pair with a fresh cucumber-tomato salad dressed with lemon and pink Himalayan salt.'
+      portion: '1 medium bowl (~180g) with 2 whole wheat rotis',
+      howMuchToEat: 'Eat a 180g bowl portion. Gives an abundant protein boost without overburdening the digestive tract.'
     }
   }
 
-  // 3. Chicken / Fish / Seafood
-  if (name.includes('chicken') || name.includes('fish') || name.includes('salmon') || name.includes('prawn') || name.includes('meat')) {
-    return {
-      portion: '150g – 180g cooked lean portion (about the size of your palm) + 1 cup steamed grains or 2 rotis',
-      howMuchToEat: 'Eat 1 palm-sized serving. Provides optimal bioavailability for post-workout muscle protein synthesis (MPS).',
-      timing,
-      proteinSource: '100% complete bioavailable animal protein delivering all 9 essential amino acids with high biological value.',
-      carbsSource: 'Virtually zero natural carbs; carbs are provided by side grains, roasted vegetables, and aromatic gravy ingredients.',
-      fatSource: 'Lean poultry fats or cardio-protective marine Omega-3 fatty acids (EPA & DHA) that reduce systemic inflammation.',
-      fiberAndMicros: 'Rich in Vitamin B12, niacin, selenium, heme iron, and zinc.',
-      prepTip: 'Marinate in hung curd with garlic, ginger, and turmeric; bake, grill, or slow-simmer with minimal added oil.',
-      pairing: 'Pair with steamed brown basmati rice and a crunchy green salad.'
-    }
-  }
-
-  // 4. Eggs / Omelette / Bhurji
-  if (name.includes('egg') || name.includes('omelet') || name.includes('bhurji') || name.includes('scramble')) {
+  // 4. Eggs / Omelette / Egg Bhurji (only if explicitly egg, not tofu)
+  if (name.includes('egg') || name.includes('omelet') || (name.includes('bhurji') && !name.includes('paneer') && !name.includes('tofu'))) {
     return {
       portion: '2 whole eggs or 3 egg whites + 1 whole wheat toast or 1 roti',
-      howMuchToEat: 'Eat 2 whole eggs. The yolk provides essential micronutrients and healthy fats, while the whites offer pure albumin protein.',
-      timing,
-      proteinSource: 'Gold-standard egg albumin protein with 100% biological score (highest protein digestibility score).',
-      carbsSource: 'Near zero from eggs; supplied by whole grain toast, sautéed tomatoes, or accompanying phulka.',
-      fatSource: 'Healthy phospholipids, choline, and unsaturated fats contained naturally in the egg yolk.',
-      fiberAndMicros: 'Supercharged with choline (for cognitive function), lutein, zeaxanthin, and Vitamin D.',
-      prepTip: 'Whisk with finely chopped green chilies, cilantro, and onions. Cook with light olive oil or ghee spray.',
-      pairing: 'Pair with a side of sautéed mushrooms, spinach, or a sliced avocado.'
+      howMuchToEat: 'Eat 2 whole eggs. The yolk provides essential micronutrients and healthy fats, while the whites offer pure albumin protein.'
     }
   }
 
-  // 5. Lentils / Dal / Chole / Rajma / Moong / Sprouts
+  // 5. Chicken / Fish / Meat
+  if (name.includes('chicken') || name.includes('fish') || name.includes('salmon') || name.includes('prawn') || name.includes('meat') || name.includes('turkey')) {
+    return {
+      portion: '150g – 180g cooked lean portion (palm-sized) + 1 cup steamed grains or 2 rotis',
+      howMuchToEat: 'Eat 1 palm-sized serving. Provides optimal bioavailability for post-workout muscle repair.'
+    }
+  }
+
+  // 6. Lentils / Dal / Chole / Rajma / Moong / Sprouts
   if (name.includes('dal') || name.includes('chole') || name.includes('rajma') || name.includes('chana') || name.includes('lentil') || name.includes('sprout')) {
     return {
-      portion: '1 large katori / bowl (~200g - 250g) + 1 cup brown rice or 2 multigrain rotis',
-      howMuchToEat: 'Eat 1 large bowl. High soluble fiber promotes gut satiety, stabilizes appetite, and prevents evening sugar cravings.',
-      timing,
-      proteinSource: 'Wholesome legume protein rich in lysine, essential for collagen synthesis and tissue repair.',
-      carbsSource: 'Complex resistant starch and slow-digesting oligosaccharides that nourish beneficial gut bacteria (microbiome).',
-      fatSource: 'Heart-healthy minimal tempering (tadka) using 1 tsp ghee, mustard seeds, and cumin.',
-      fiberAndMicros: 'Packed with 7-9g dietary fiber, folate, potassium, magnesium, and non-heme iron.',
-      prepTip: 'Soak pulses for 6–8 hours and cook with a pinch of hing (asafoetida) and ginger to ensure effortless digestion.',
-      pairing: 'Squeeze half a fresh lemon right before eating; the Vitamin C enhances non-heme iron absorption by up to 300%.'
+      portion: '1 large katori / bowl (~200g - 250g) + 1 cup brown rice or 2 rotis',
+      howMuchToEat: 'Eat 1 large bowl. High soluble fiber promotes gut satiety, stabilizes appetite, and prevents evening sugar cravings.'
     }
   }
 
-  // 6. Dosa / Idli / Uttapam
+  // 7. Dosa / Idli / Uttapam
   if (name.includes('dosa') || name.includes('idli') || name.includes('uttapam') || name.includes('vada')) {
     return {
       portion: name.includes('idli') ? '3-4 steamed idlis + 1 large bowl vegetable sambar' : '2 medium dosas / uttapams + 1 bowl sambar',
-      howMuchToEat: 'Eat 2-3 pieces with plenty of vegetable sambar. The fermentation pre-digests nutrients for instant absorption.',
-      timing,
-      proteinSource: 'Complementary plant proteins from fermented urad dal combined with lentil-rich vegetable sambar.',
-      carbsSource: 'Naturally fermented rice and lentil carbohydrates offering quick, clean glycogen replenishment with probiotics.',
-      fatSource: 'Very low fat; healthy lipids from roasted peanut or freshly grated coconut chutney.',
-      fiberAndMicros: 'High in natural B-complex vitamins generated by fermentation, plus dietary fiber from sambar vegetables.',
-      prepTip: 'Use a seasoned cast-iron skillet and limit oil to 1/2 tsp per piece. Pack the sambar with bottle gourd and drumsticks.',
-      pairing: 'Enjoy with hot piping sambar and a spoonful of roasted chana-dal chutney.'
+      howMuchToEat: 'Eat 2-3 pieces with plenty of vegetable sambar. The natural fermentation ensures light and effortless digestion.'
     }
   }
 
-  // 7. Poha / Upma / Khichdi / Oats / Porridge
+  // 8. Sandwich / Toast / Wrap
+  if (name.includes('sandwich') || name.includes('toast') || name.includes('wrap') || name.includes('roll')) {
+    return {
+      portion: '1 full sandwich (2 sliced halves) or 2 loaded toasts',
+      howMuchToEat: `Eat 1 standard portion. Provides ${protein}g protein balanced with fiber-rich carbs for long-lasting morning fuel.`
+    }
+  }
+
+  // 9. Poha / Upma / Khichdi / Oats / Porridge
   if (name.includes('poha') || name.includes('upma') || name.includes('khichdi') || name.includes('oat') || name.includes('porridge') || name.includes('muesli')) {
     return {
       portion: '1 medium bowl (~200g - 240g)',
-      howMuchToEat: 'Eat 1 moderate bowl. Enjoy slowly and chew well to allow satiety signals to register with your brain.',
-      timing,
-      proteinSource: 'Enhanced with roasted peanuts, green peas, sprouted legumes, or skimmed milk/curd.',
-      carbsSource: 'Easily digestible carbohydrates providing clean mental alertness and physical vitality for your active day.',
-      fatSource: 'Monounsaturated fats from roasted peanuts, mustard seeds, and curry leaf tempering.',
-      fiberAndMicros: 'Dietary fiber, iron from flattened rice, and digestive bioactives from turmeric and mustard.',
-      prepTip: 'Toss in extra diced veggies (carrots, green beans, bell peppers) to double the volume without adding excess calories.',
-      pairing: 'Pair with a cup of unsweetened spiced chai or a glass of lemon-infused water.'
+      howMuchToEat: 'Eat 1 moderate bowl. Slow-burning carbs supply mental alertness and clean physical energy.'
     }
   }
 
-  // 8. Biryani / Pulao / Rice bowls
-  if (name.includes('biryani') || name.includes('pulao') || name.includes('rice') || name.includes('grain')) {
+  // 10. Biryani / Pulao / Rice bowls
+  if (name.includes('biryani') || name.includes('pulao') || name.includes('rice')) {
     return {
       portion: '1 medium bowl (~220g) + 1 small bowl vegetable or cucumber raita',
-      howMuchToEat: 'Eat 1 measured bowl. Pairing with cooling raita balances the spices and blunts any rapid glycemic response.',
-      timing,
-      proteinSource: 'Protein-packed inclusions such as marinated chicken, boiled eggs, soya chunks, or spiced paneer.',
-      carbsSource: 'Aromatic long-grain basmati or brown rice delivering sustained muscular glycogen replenishment.',
-      fatSource: 'Subtle aromatic spices infused with a measured spoon of ghee or cold-pressed vegetable oil.',
-      fiberAndMicros: 'Antioxidants and phytonutrients from whole cardamom, cloves, star anise, saffron, and fresh mint leaves.',
-      prepTip: 'Cook using brown basmati rice and layer with abundant fresh mint and sliced brown onions for authentic dum flavor.',
-      pairing: 'Serve with chilled cucumber-cumin raita to aid digestion and promote gut cooling.'
+      howMuchToEat: 'Eat 1 measured bowl. Pairing with cooling raita balances the spices and moderates blood sugar release.'
     }
   }
 
-  // 9. General / Fallback Balanced Dish
+  // 11. Salad / Fruit / Smoothie
+  if (name.includes('salad') || name.includes('smoothie') || name.includes('shake') || name.includes('fruit')) {
+    return {
+      portion: name.includes('shake') || name.includes('smoothie') ? '1 tall glass (300ml)' : '1 large bowl (~220g)',
+      howMuchToEat: 'Consume 1 full serving to replenish micronutrients, electrolytes, and antioxidants without heavy calories.'
+    }
+  }
+
+  // 12. General fallback
   const portionEst =
     type === 'breakfast'
       ? '1 standard serving (~200g - 220g)'
       : type === 'lunch'
       ? '1 main bowl (~250g) with 2 whole wheat rotis or grains'
       : type === 'dinner'
-      ? '1 light bowl (~200g) with a side of steamed greens'
+      ? '1 light bowl (~200g) with green salad'
       : '1 small bowl or fistful portion (~100g - 120g)'
 
   return {
     portion: portionEst,
-    howMuchToEat: `Eat ${portionEst}. Designed to deliver ${calories} kcal and ${protein}g protein aligned with your daily nutrition goals.`,
-    timing,
-    proteinSource: `Provides ${protein}g of protein to maintain positive nitrogen balance, support tissue regeneration, and preserve lean body mass.`,
-    carbsSource: `Supplies ${carbs}g of energizing complex carbohydrates for steady physical stamina and brain vitality without energy dips.`,
-    fatSource: `Contains ${fat}g of balanced dietary lipids essential for healthy cell membranes, hormone synthesis, and nutrient assimilation.`,
-    fiberAndMicros: 'Balanced micronutrient matrix with essential vitamins, minerals, and digestive dietary fiber.',
-    prepTip: 'Prepare using fresh, wholesome ingredients with minimal processed oils. Season with natural herbs and spices.',
-    pairing: 'Pair with fresh greens or a cup of warm water with lemon 20 minutes before eating.'
+    howMuchToEat: `Eat ${portionEst}. Supplies ${protein}g protein and ${calories} kcal tailored to your nutrition target.`
   }
 }
 
@@ -598,13 +535,11 @@ export function MealPlannerPage({ setPage }: MealPlannerPageProps) {
 
       {/* Detailed Meal View Popup Modal */}
       {selectedMealDetail && (() => {
-        const mealInsights = getMealNutrientBreakdown(
+        const guidance = getServingAndPortionGuidance(
           selectedMealDetail.food_name,
           selectedMealDetail.meal_type,
           selectedMealDetail.calories,
-          selectedMealDetail.protein,
-          selectedMealDetail.carbs,
-          selectedMealDetail.fat
+          selectedMealDetail.protein
         )
 
         return (
@@ -612,7 +547,7 @@ export function MealPlannerPage({ setPage }: MealPlannerPageProps) {
             <div
               className="modal-card"
               style={{
-                maxWidth: '560px',
+                maxWidth: '540px',
                 width: '100%',
                 maxHeight: '90vh',
                 display: 'flex',
@@ -686,7 +621,7 @@ export function MealPlannerPage({ setPage }: MealPlannerPageProps) {
                   </p>
                 </div>
 
-                {/* Portion Guidance & How Much To Eat Card */}
+                {/* Serving Size & How Much To Eat Box */}
                 <div
                   style={{
                     background: 'var(--tint)',
@@ -699,22 +634,12 @@ export function MealPlannerPage({ setPage }: MealPlannerPageProps) {
                     gap: '6px',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--green)', fontWeight: 600, fontSize: '12px', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-                      <Scale size={15} />
-                      <span>RECOMMENDED SERVING & PORTION</span>
-                    </div>
-                    <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                      <Clock size={12} /> {mealInsights.timing}
-                    </span>
-                  </div>
-
                   <div style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--text)' }}>
-                    Serving Size: <span style={{ color: 'var(--green)' }}>{mealInsights.portion}</span>
+                    Serving Size: <span style={{ color: 'var(--green)' }}>{guidance.portion}</span>
                   </div>
 
                   <p style={{ fontSize: '12.5px', color: 'var(--muted)', lineHeight: 1.45, margin: 0 }}>
-                    💡 <strong>How much to eat:</strong> {mealInsights.howMuchToEat}
+                    💡 <strong>How much to eat:</strong> {guidance.howMuchToEat}
                   </p>
                 </div>
 
@@ -755,7 +680,7 @@ export function MealPlannerPage({ setPage }: MealPlannerPageProps) {
                 </div>
 
                 {/* Macro Energy Distribution Bar */}
-                <div style={{ marginBottom: '18px' }}>
+                <div style={{ marginBottom: '20px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--muted)', marginBottom: '6px', fontFamily: 'var(--font-mono)' }}>
                     <span>Macronutrient Ratio</span>
                     <span>
@@ -767,75 +692,6 @@ export function MealPlannerPage({ setPage }: MealPlannerPageProps) {
                     <i style={{ width: `${Math.round(((selectedMealDetail.carbs * 4) / Math.max(1, selectedMealDetail.calories)) * 100)}%`, background: '#d79a28' }} />
                     <i style={{ width: `${Math.round(((selectedMealDetail.fat * 9) / Math.max(1, selectedMealDetail.calories)) * 100)}%`, background: 'var(--terracotta)' }} />
                   </div>
-                </div>
-
-                {/* Where the Macros Come From (Nutrient Origin Breakdown) */}
-                <div style={{ marginBottom: '18px' }}>
-                  <h3 style={{ fontSize: '12px', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '8px' }}>
-                    Where Your Nutrients Come From
-                  </h3>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '10px', padding: '10px 12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
-                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--green)' }} />
-                        <strong style={{ fontSize: '13px', color: 'var(--text)' }}>Protein ({selectedMealDetail.protein}g)</strong>
-                      </div>
-                      <p style={{ margin: 0, fontSize: '12px', color: 'var(--muted)', lineHeight: 1.45 }}>
-                        {mealInsights.proteinSource}
-                      </p>
-                    </div>
-
-                    <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '10px', padding: '10px 12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
-                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#d79a28' }} />
-                        <strong style={{ fontSize: '13px', color: 'var(--text)' }}>Carbohydrates ({selectedMealDetail.carbs}g)</strong>
-                      </div>
-                      <p style={{ margin: 0, fontSize: '12px', color: 'var(--muted)', lineHeight: 1.45 }}>
-                        {mealInsights.carbsSource}
-                      </p>
-                    </div>
-
-                    <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '10px', padding: '10px 12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
-                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--terracotta)' }} />
-                        <strong style={{ fontSize: '13px', color: 'var(--text)' }}>Fats & Lipids ({selectedMealDetail.fat}g)</strong>
-                      </div>
-                      <p style={{ margin: 0, fontSize: '12px', color: 'var(--muted)', lineHeight: 1.45 }}>
-                        {mealInsights.fatSource}
-                      </p>
-                    </div>
-
-                    <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '10px', padding: '10px 12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
-                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent)' }} />
-                        <strong style={{ fontSize: '13px', color: 'var(--text)' }}>Dietary Fiber & Micronutrients</strong>
-                      </div>
-                      <p style={{ margin: 0, fontSize: '12px', color: 'var(--muted)', lineHeight: 1.45 }}>
-                        {mealInsights.fiberAndMicros}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Chef & Nutritionist Preparation Tips */}
-                <div
-                  style={{
-                    background: 'var(--surface-subtle)',
-                    border: '1px solid var(--line)',
-                    borderRadius: '10px',
-                    padding: '12px 14px',
-                    marginBottom: '20px',
-                    fontSize: '12px',
-                    lineHeight: 1.5,
-                    color: 'var(--muted)',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--text)', marginBottom: '5px' }}>
-                    <ChefHat size={14} color="var(--green)" />
-                    <span>Preparation & Pairing Guide</span>
-                  </div>
-                  <p style={{ margin: '0 0 5px' }}>• <strong>Preparation:</strong> {mealInsights.prepTip}</p>
-                  <p style={{ margin: 0 }}>• <strong>Best Pairing:</strong> {mealInsights.pairing}</p>
                 </div>
 
                 {/* Action Buttons */}
@@ -866,7 +722,7 @@ export function MealPlannerPage({ setPage }: MealPlannerPageProps) {
                         fiber: 4,
                         sugar: 4,
                         sodium: 400,
-                        serving_size: mealInsights.portion,
+                        serving_size: guidance.portion,
                         meal_type: selectedMealDetail.meal_type,
                         image_url: null,
                         logged_at: new Date().toISOString(),
