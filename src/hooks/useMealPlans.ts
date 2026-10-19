@@ -277,25 +277,34 @@ function createFallbackMealPlans(
       s = veganize(s);
     }
 
-    // Calibrate calories & macros proportionally to targetCalories (derived from workload & age)
+    // Calibrate calories & macros proportionally to targetCalories so the exact sum matches targetCalories
     const dayBaseCalories = b.calories + l.calories + dn.calories + s.calories;
     const ratio = targetCalories / dayBaseCalories;
 
-    const scaleMeal = (m: any) => ({
-      ...m,
-      calories: Math.round((m.calories * ratio) / 10) * 10,
-      protein: Math.max(5, Math.round(m.protein * ratio)),
-      carbs: Math.max(10, Math.round(m.carbs * ratio)),
-      fat: Math.max(3, Math.round(m.fat * ratio)),
-    });
+    const bCal = Math.round((b.calories * ratio) / 10) * 10;
+    const lCal = Math.round((l.calories * ratio) / 10) * 10;
+    const dnCal = Math.round((dn.calories * ratio) / 10) * 10;
+    // Remainder to snack guarantees that Breakfast + Lunch + Dinner + Snack === targetCalories EXACTLY
+    const sCal = Math.max(50, targetCalories - (bCal + lCal + dnCal));
+
+    const scaleMealWithCal = (m: any, finalCal: number) => {
+      const mealRatio = finalCal / Math.max(1, m.calories);
+      return {
+        ...m,
+        calories: finalCal,
+        protein: Math.max(5, Math.round(m.protein * mealRatio)),
+        carbs: Math.max(10, Math.round(m.carbs * mealRatio)),
+        fat: Math.max(2, Math.round(m.fat * mealRatio)),
+      };
+    };
 
     result.push({
       day: d,
       meals: [
-        { meal_type: 'breakfast', ...scaleMeal(b) },
-        { meal_type: 'lunch', ...scaleMeal(l) },
-        { meal_type: 'dinner', ...scaleMeal(dn) },
-        { meal_type: 'snack', ...scaleMeal(s) },
+        { meal_type: 'breakfast', ...scaleMealWithCal(b, bCal) },
+        { meal_type: 'lunch', ...scaleMealWithCal(l, lCal) },
+        { meal_type: 'dinner', ...scaleMealWithCal(dn, dnCal) },
+        { meal_type: 'snack', ...scaleMealWithCal(s, sCal) },
       ]
     });
   }
@@ -345,6 +354,7 @@ export function useMealPlans() {
       targetDate?: string;
       customNote?: string;
       silent?: boolean;
+      targetCalories?: number;
     }
   ) => {
     if (!user || !profile) {
@@ -362,7 +372,7 @@ export function useMealPlans() {
     const isDaily = days === 1;
     const targetDateStr = params?.targetDate || format(new Date(), 'yyyy-MM-dd');
 
-    // Scientifically calibrate activity level & daily target calories based on workload hours & age
+    // Scientifically calibrate activity level based on workload hours
     let activityMultiplier = 1.45;
     let activityLevel: 'sedentary' | 'light' | 'moderate' | 'active' | 'very_active' = 'moderate';
     if (workload <= 3) {
@@ -379,8 +389,18 @@ export function useMealPlans() {
       activityLevel = 'very_active';
     }
 
-    const baseCalorie = Math.round((1650 - Math.min(userAge, 65) * 4) * activityMultiplier);
-    const targetCalories = Math.max(1600, Math.min(3200, Math.round(baseCalorie / 50) * 50));
+    // Determine target calories: prioritize explicit user input, then profile target, else standard 2000 kcal
+    let targetCalories = params?.targetCalories;
+    if (!targetCalories || isNaN(targetCalories) || targetCalories <= 0) {
+      if (profile.daily_calorie_target && profile.daily_calorie_target >= 800) {
+        targetCalories = profile.daily_calorie_target;
+      } else {
+        const baseCalorie = Math.round((1650 - Math.min(userAge, 65) * 4) * activityMultiplier);
+        targetCalories = Math.max(1400, Math.min(3200, Math.round(baseCalorie / 50) * 50));
+      }
+    }
+    // Round to nearest 10 for clean display
+    targetCalories = Math.round(targetCalories / 10) * 10;
 
     setGenerating(true);
     try {
@@ -445,6 +465,43 @@ export function useMealPlans() {
               console.warn('AI returned non-veg meals for veg preference. Using verified vegetarian meal plan.');
               generatedPlans = null;
             }
+          }
+
+          // Balance edge function generated meals so their exact sum matches targetCalories
+          if (generatedPlans) {
+            generatedPlans = generatedPlans.map((dp: any) => {
+              if (!dp.meals || dp.meals.length === 0) return dp;
+              const currentTotal = dp.meals.reduce((sum: number, m: any) => sum + (Number(m.calories) || 0), 0);
+              if (currentTotal > 0 && currentTotal !== targetCalories) {
+                const ratio = targetCalories / currentTotal;
+                let runningSum = 0;
+                const balancedMeals = dp.meals.map((m: any, idx: number) => {
+                  if (idx === dp.meals.length - 1) {
+                    const finalCal = Math.max(50, targetCalories - runningSum);
+                    const mRatio = finalCal / Math.max(1, m.calories || 1);
+                    return {
+                      ...m,
+                      calories: finalCal,
+                      protein: Math.max(5, Math.round((m.protein || 0) * mRatio)),
+                      carbs: Math.max(5, Math.round((m.carbs || 0) * mRatio)),
+                      fat: Math.max(2, Math.round((m.fat || 0) * mRatio)),
+                    };
+                  }
+                  const finalCal = Math.round(((m.calories || 0) * ratio) / 10) * 10;
+                  runningSum += finalCal;
+                  const mRatio = finalCal / Math.max(1, m.calories || 1);
+                  return {
+                    ...m,
+                    calories: finalCal,
+                    protein: Math.max(5, Math.round((m.protein || 0) * mRatio)),
+                    carbs: Math.max(5, Math.round((m.carbs || 0) * mRatio)),
+                    fat: Math.max(2, Math.round((m.fat || 0) * mRatio)),
+                  };
+                });
+                return { ...dp, meals: balancedMeals };
+              }
+              return dp;
+            });
           }
         }
       } catch (invokeErr) {

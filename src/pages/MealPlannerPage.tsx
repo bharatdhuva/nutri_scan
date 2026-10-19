@@ -159,6 +159,7 @@ export function MealPlannerPage({ setPage }: MealPlannerPageProps) {
   const [selectedDay, setSelectedDay] = useState('Monday')
   const [goal, setGoal] = useState<'weight-loss' | 'balanced' | 'muscle'>('balanced')
   const [calorieTarget, setCalorieTarget] = useState('2000')
+  const [isCalorieCustomized, setIsCalorieCustomized] = useState(false)
   const [dietaryPreference, setDietaryPreference] = useState<'veg' | 'non-veg' | 'vegan'>('veg')
 
   // Detailed Meal View Modal state
@@ -179,9 +180,6 @@ export function MealPlannerPage({ setPage }: MealPlannerPageProps) {
     if (profile?.dietary_preference) {
       setDietaryPreference(profile.dietary_preference)
     }
-    if (profile?.daily_calorie_target) {
-      setCalorieTarget(String(profile.daily_calorie_target))
-    }
   }, [profile])
 
   const handleGenerate = async () => {
@@ -196,10 +194,13 @@ export function MealPlannerPage({ setPage }: MealPlannerPageProps) {
     }
 
     try {
+      const parsedTarget = Math.max(800, parseInt(calorieTarget) || 2000)
       await generateMealPlan(7, dietaryPreference, {
         targetDate: format(new Date(), 'yyyy-MM-dd'),
+        targetCalories: parsedTarget,
         silent: false,
       })
+      setIsCalorieCustomized(false)
     } catch (err: any) {
       console.warn('Meal plan generation notice:', err)
     }
@@ -222,6 +223,17 @@ export function MealPlannerPage({ setPage }: MealPlannerPageProps) {
 
   const totalCalories = mealsForDay.reduce((acc, m) => acc + (m.calories || 0), 0)
   const totalProtein = mealsForDay.reduce((acc, m) => acc + (m.protein || 0), 0)
+
+  // Keep upper calorie target matching the active daily plan overview unless manually edited
+  useEffect(() => {
+    if (!isCalorieCustomized) {
+      if (totalCalories > 0) {
+        setCalorieTarget(String(totalCalories))
+      } else if (profile?.daily_calorie_target) {
+        setCalorieTarget(String(profile.daily_calorie_target))
+      }
+    }
+  }, [totalCalories, profile?.daily_calorie_target, isCalorieCustomized])
 
   const handleAddCustomMeal = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -290,8 +302,11 @@ export function MealPlannerPage({ setPage }: MealPlannerPageProps) {
             <input
               type="number"
               value={calorieTarget}
-              onChange={(e) => setCalorieTarget(e.target.value)}
-              min="1200"
+              onChange={(e) => {
+                setIsCalorieCustomized(true)
+                setCalorieTarget(e.target.value)
+              }}
+              min="800"
               max="4000"
               step="50"
             />
@@ -684,7 +699,7 @@ export function MealPlannerPage({ setPage }: MealPlannerPageProps) {
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--muted)', marginBottom: '6px', fontFamily: 'var(--font-mono)' }}>
                     <span>Macronutrient Ratio</span>
                     <span>
-                      {Math.round((selectedMealDetail.calories / (profile?.daily_calorie_target || 2000)) * 100)}% of daily target
+                      {Math.round((selectedMealDetail.calories / (parseInt(calorieTarget) || profile?.daily_calorie_target || 2000)) * 100)}% of daily target
                     </span>
                   </div>
                   <div className="macro-bar" style={{ height: '7px', borderRadius: '4px', overflow: 'hidden' }}>
