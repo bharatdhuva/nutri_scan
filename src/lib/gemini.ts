@@ -349,3 +349,249 @@ Instructions for replying:
     return null
   }
 }
+
+export interface ExtractedLabelData {
+  productName: string | null;
+  brand: string | null;
+  servingSize: string | null;
+  servingQuantityGrams: number | null;
+  calories: number | null;
+  protein: number | null;
+  carbs: number | null;
+  fat: number | null;
+  saturatedFat: number | null;
+  fiber: number | null;
+  sugar: number | null;
+  sodium: number | null; // in mg
+  ingredientsText: string | null;
+  allergens: string[] | null;
+}
+
+/**
+ * Parses printed packaged nutrition label / ingredients photo using Gemini Vision.
+ * Only extracts what is printed; unprinted or non-visible values are set to null.
+ */
+export async function analyzeLabelWithGemini(
+  base64Image: string
+): Promise<ExtractedLabelData | null> {
+  const apiKey = getGeminiApiKey()
+  if (!apiKey) {
+    console.warn('No Gemini API key configured for label analysis.')
+    return null
+  }
+
+  let cleanBase64 = base64Image
+  let mimeType = 'image/jpeg'
+
+  if (base64Image.includes(',')) {
+    const parts = base64Image.split(',')
+    const mimeMatch = parts[0].match(/:(.*?);/)
+    if (mimeMatch) mimeType = mimeMatch[1]
+    cleanBase64 = parts[1]
+  }
+
+  const prompt = `You are a nutrition label and OCR specialist.
+Analyze this photo of a food product packaging label, nutrition facts panel, or ingredient list.
+Extract ONLY what is explicitly printed or clearly visible on the label.
+Do NOT guess, estimate, or hallucinate missing information.
+If a value is not printed on the label, you MUST use null.
+
+Output a strict, single JSON object with no markdown fences, matching this schema:
+{
+  "productName": "Printed product name or null",
+  "brand": "Printed brand name or null",
+  "servingSize": "Printed serving size (e.g. '1 bar (40g)' or '30g') or null",
+  "servingQuantityGrams": 40,
+  "calories": 180,
+  "protein": 5.0,
+  "carbs": 24.0,
+  "fat": 8.0,
+  "saturatedFat": 2.5,
+  "fiber": 3.0,
+  "sugar": 12.0,
+  "sodium": 140,
+  "ingredientsText": "Exact printed ingredient list text or null",
+  "allergens": ["Milk", "Wheat", "Soy"]
+}
+
+Important Rules:
+1. Provide sodium in milligrams (mg). If printed as salt in grams, convert (salt_g * 400).
+2. For numeric fields (calories, protein, carbs, fat, saturatedFat, fiber, sugar, sodium, servingQuantityGrams), output a number or null.
+3. If nutrition is listed per 100g, state '100g' as servingSize and 100 as servingQuantityGrams.
+4. Output strictly valid JSON without \`\`\`json or backticks.`
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              {
+                inline_data: {
+                  mime_type: mimeType,
+                  data: cleanBase64,
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.1,
+          topK: 16,
+          topP: 0.95,
+          maxOutputTokens: 2048,
+        },
+      }),
+    })
+
+    if (!response.ok) {
+      const errText = await response.text()
+      console.error('Gemini Label OCR error:', response.status, errText)
+      return null
+    }
+
+    const data = await response.json()
+    const rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+    const sanitized = rawContent
+      .replace(/^```json/m, '')
+      .replace(/^```/m, '')
+      .trim()
+
+    return JSON.parse(sanitized) as ExtractedLabelData
+  } catch (err) {
+    console.error('Failed to parse Gemini Label OCR response:', err)
+    return null
+  }
+}
+
+/**
+ * Parses user-pasted ingredients or nutrition text using Gemini (or returns null if no key).
+ */
+export async function parseNutritionTextWithGemini(
+  rawText: string
+): Promise<ExtractedLabelData | null> {
+  const apiKey = getGeminiApiKey()
+  if (!apiKey) return null
+
+  const prompt = `You are a nutrition label and ingredient list parser.
+Parse this user-pasted food label text or ingredient list.
+Extract ONLY what is explicitly mentioned in the text.
+Use null for any field not mentioned.
+
+User text:
+"""
+${rawText}
+"""
+
+Output a strict, single JSON object with no markdown fences, matching this schema:
+{
+  "productName": "Product name if mentioned, else null",
+  "brand": "Brand if mentioned, else null",
+  "servingSize": "Serving size if mentioned, else null",
+  "servingQuantityGrams": null,
+  "calories": null,
+  "protein": null,
+  "carbs": null,
+  "fat": null,
+  "saturatedFat": null,
+  "fiber": null,
+  "sugar": null,
+  "sodium": null,
+  "ingredientsText": "Cleaned full ingredients string or null",
+  "allergens": []
+}`
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
+      }),
+    })
+
+    if (!response.ok) return null
+    const data = await response.json()
+    const rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+    const sanitized = rawContent.replace(/^```json/m, '').replace(/^```/m, '').trim()
+    return JSON.parse(sanitized) as ExtractedLabelData
+  } catch (err) {
+    console.warn('Gemini text parsing error:', err)
+    return null
+  }
+}
+
+/**
+ * Robust regex-based fallback parser for pasted label text when offline or without API key.
+ */
+export function parseLabelTextLocally(rawText: string): ExtractedLabelData {
+  const text = rawText.trim()
+
+  const extractNum = (regex: RegExp): number | null => {
+    const m = text.match(regex)
+    if (!m) return null
+    const val = parseFloat(m[1])
+    return isNaN(val) ? null : val
+  }
+
+  const calories = extractNum(/(?:calories|energy|kcal)[:\s]*(\d+(?:\.\d+)?)/i)
+  const protein = extractNum(/(?:protein|proteins)[:\s]*(\d+(?:\.\d+)?)\s*g?/i)
+  const carbs = extractNum(/(?:total carbohydrate|carbohydrate|carbs)[:\s]*(\d+(?:\.\d+)?)\s*g?/i)
+  const fat = extractNum(/(?:total fat|fat)[:\s]*(\d+(?:\.\d+)?)\s*g?/i)
+  const saturatedFat = extractNum(/(?:saturated fat|sat fat)[:\s]*(\d+(?:\.\d+)?)\s*g?/i)
+  const fiber = extractNum(/(?:dietary fiber|fiber|fibre)[:\s]*(\d+(?:\.\d+)?)\s*g?/i)
+  const sugar = extractNum(/(?:total sugars|sugars|sugar)[:\s]*(\d+(?:\.\d+)?)\s*g?/i)
+
+  let sodium = extractNum(/(?:sodium)[:\s]*(\d+(?:\.\d+)?)\s*mg/i)
+  if (sodium === null) {
+    const saltG = extractNum(/(?:salt)[:\s]*(\d+(?:\.\d+)?)\s*g/i)
+    if (saltG !== null) sodium = Math.round(saltG * 400)
+  }
+
+  const servingMatch = text.match(/(?:serving size|portion)[:\s]*([^\n,]+)/i)
+  const servingSize = servingMatch ? servingMatch[1].trim() : null
+  const servingGramsMatch = servingSize?.match(/(\d+(?:\.\d+)?)\s*g\b/i)
+  const servingQuantityGrams = servingGramsMatch ? parseFloat(servingGramsMatch[1]) : null
+
+  // Extract ingredients section if introduced by "Ingredients:"
+  let ingredientsText = text
+  const ingMatch = text.match(/(?:ingredients?|contains)[:\s]*([\s\S]+?)(?:\.|$)/i)
+  if (ingMatch) {
+    ingredientsText = ingMatch[1].trim()
+  }
+
+  // First line might be product name
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+  const firstLine = lines[0] || ''
+  const productName = (!/calories|nutrition|ingredients|facts/i.test(firstLine) && firstLine.length < 50)
+    ? firstLine
+    : 'Custom Packaged Food'
+
+  return {
+    productName,
+    brand: null,
+    servingSize,
+    servingQuantityGrams,
+    calories,
+    protein,
+    carbs,
+    fat,
+    saturatedFat,
+    fiber,
+    sugar,
+    sodium,
+    ingredientsText,
+    allergens: null,
+  }
+}
+

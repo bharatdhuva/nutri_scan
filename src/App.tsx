@@ -4,7 +4,9 @@ import { Toaster } from '@/components/ui/toaster'
 import { Header } from '@/components/layout/Header'
 import { HomePage } from '@/pages/HomePage'
 import { AnalyzePage } from '@/pages/AnalyzePage'
+import { PackagedScanPage } from '@/pages/PackagedScanPage'
 import { ResultPage } from '@/pages/ResultPage'
+
 import { AuthPage } from '@/pages/AuthPage'
 import { MealPlannerPage } from '@/pages/MealPlannerPage'
 import { ProgressPage } from '@/pages/ProgressPage'
@@ -59,7 +61,14 @@ function AppContent() {
           onAnalysisComplete={(res) => setCurrentAnalysis(res)}
         />
       )}
+      {page === 'packaged' && (
+        <PackagedScanPage
+          setPage={setPage}
+          onAnalysisComplete={(res) => setCurrentAnalysis(res)}
+        />
+      )}
       {page === 'results' && (
+
         <ResultPage
           analysisData={currentAnalysis}
           setPage={setPage}

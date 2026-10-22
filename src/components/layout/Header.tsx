@@ -47,7 +47,11 @@ export function Header({ page, setPage }: HeaderProps) {
         <button className={page === 'analyze' ? 'active' : ''} onClick={() => go('analyze')}>
           Analyze
         </button>
+        <button className={page === 'packaged' ? 'active' : ''} onClick={() => go('packaged')}>
+          Packaged
+        </button>
         <button className={page === 'planner' ? 'active' : ''} onClick={() => go('planner')}>
+
           Meal Planner
         </button>
         <button className={page === 'progress' ? 'active' : ''} onClick={() => go('progress')}>

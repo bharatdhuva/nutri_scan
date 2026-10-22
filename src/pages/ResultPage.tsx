@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import {
+  AlertCircle,
   ArrowRight,
+
+  Barcode,
   BookmarkCheck,
   ChevronDown,
   Send,
@@ -8,6 +11,7 @@ import {
   ScanSearch,
   X,
 } from 'lucide-react'
+
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/contexts/AuthContext'
 import { useMeals } from '@/hooks/useMeals'
@@ -247,13 +251,24 @@ export function ResultPage({
     }
   }
 
-  const macrosList = calories > 0 ? [
-    ['Protein', `${protein}g`, `${protein * 4} kcal`, `${Math.round((protein * 4 / calories) * 100)}%`, 'green'],
-    ['Carbs', `${carbs}g`, `${carbs * 4} kcal`, `${Math.round((carbs * 4 / calories) * 100)}%`, 'amber'],
-    ['Fat', `${fat}g`, `${fat * 9} kcal`, `${Math.round((fat * 9 / calories) * 100)}%`, 'orange'],
-    ['Fiber', `${fiber}g`, '—', '12%', 'green'],
-    ['Sugar', `${sugar}g`, '—', '8%', 'orange'],
+  const isPackaged = analysisData?.source === 'openfoodfacts' || analysisData?.source === 'label' || Boolean(analysisData?.isPackaged)
+  const missingFields: string[] = Array.isArray(analysisData?.missingFields) ? analysisData.missingFields : []
+
+  const isFiberMissing = isPackaged && missingFields.includes('fiber')
+  const isSugarMissing = isPackaged && missingFields.includes('sugar')
+  const isProteinMissing = isPackaged && missingFields.includes('protein')
+  const isCarbsMissing = isPackaged && missingFields.includes('carbs')
+  const isFatMissing = isPackaged && missingFields.includes('fat')
+  const isSodiumMissing = isPackaged && missingFields.includes('sodium')
+
+  const macrosList = calories > 0 || (isPackaged && (protein > 0 || carbs > 0 || fat > 0)) ? [
+    ['Protein', isProteinMissing ? 'Not listed' : `${protein}g`, isProteinMissing ? '—' : `${Math.round(protein * 4)} kcal`, isProteinMissing || calories <= 0 ? '—' : `${Math.round((protein * 4 / calories) * 100)}%`, 'green'],
+    ['Carbs', isCarbsMissing ? 'Not listed' : `${carbs}g`, isCarbsMissing ? '—' : `${Math.round(carbs * 4)} kcal`, isCarbsMissing || calories <= 0 ? '—' : `${Math.round((carbs * 4 / calories) * 100)}%`, 'amber'],
+    ['Fat', isFatMissing ? 'Not listed' : `${fat}g`, isFatMissing ? '—' : `${Math.round(fat * 9)} kcal`, isFatMissing || calories <= 0 ? '—' : `${Math.round((fat * 9 / calories) * 100)}%`, 'orange'],
+    ['Fiber', isFiberMissing ? 'Not listed' : `${fiber}g`, '—', isFiberMissing ? '—' : (isPackaged ? `${Math.round((fiber / 28) * 100)}%` : '12%'), 'green'],
+    ['Sugar', isSugarMissing ? 'Not listed' : `${sugar}g`, '—', isSugarMissing ? '—' : (isPackaged ? `${Math.round((sugar / 50) * 100)}%` : '8%'), 'orange'],
   ] : []
+
 
   return (
     <>
@@ -314,10 +329,132 @@ export function ResultPage({
                     <h2>{dishName}</h2>
                     <p>{analysisData?.description || 'Authentic dish deconstructed into individual ingredients, portion weights, and macro breakdown.'}</p>
                     <span className="muted" style={{ fontSize: '13px', fontFamily: 'var(--font-mono)' }}>
-                      Portion: {analysisData?.servingSize || '1 serving (approx 300g)'}
+                      Portion: {analysisData?.servingSize || (isPackaged ? 'Not specified' : '1 serving (approx 300g)')}
                     </span>
                   </div>
                 </section>
+
+                {/* ── PACKAGED PRODUCT INTEL (Open Food Facts & Label OCR) ── */}
+                {isPackaged && (
+                  <section
+                    style={{
+                      background: 'var(--surface)',
+                      border: '1px solid var(--line)',
+                      borderRadius: 'var(--radius-lg)',
+                      padding: '20px 24px',
+                      marginBottom: '20px',
+                      boxShadow: 'var(--shadow-sm)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', marginBottom: '14px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Barcode size={18} style={{ color: 'var(--green)' }} />
+                        <span className="label-small" style={{ color: 'var(--green)' }}>
+                          {analysisData?.source === 'openfoodfacts' ? 'VERIFIED OPEN FOOD FACTS DATA' : 'PACKAGED LABEL DATA'}
+                        </span>
+                      </div>
+                      {analysisData?.barcode && (
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--muted)', background: 'var(--surface-subtle)', padding: '3px 8px', borderRadius: '4px' }}>
+                          Barcode: {analysisData.barcode}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Badges: Nutri-Score & NOVA */}
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '16px' }}>
+                      {analysisData?.nutriscore && (
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '8px', background: getNutriScoreBg(analysisData.nutriscore), color: '#ffffff', fontWeight: 700, fontSize: '13px' }}>
+                          <span>NUTRI-SCORE</span>
+                          <span style={{ fontSize: '16px', textTransform: 'uppercase' }}>{analysisData.nutriscore}</span>
+                        </div>
+                      )}
+                      {analysisData?.nova && (
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '8px', background: getNovaBg(analysisData.nova), color: '#ffffff', fontWeight: 700, fontSize: '13px' }}>
+                          <span>NOVA {analysisData.nova}</span>
+                          <span style={{ fontSize: '12px', fontWeight: 500, opacity: 0.9 }}>
+                            {analysisData.nova === 4 ? 'Ultra-processed' : analysisData.nova === 3 ? 'Processed' : analysisData.nova === 2 ? 'Culinary ingredients' : 'Unprocessed'}
+                          </span>
+                        </div>
+                      )}
+                      {analysisData?.brands && (
+                        <div style={{ display: 'inline-flex', alignItems: 'center', padding: '6px 12px', borderRadius: '8px', background: 'var(--surface-subtle)', border: '1px solid var(--line)', fontSize: '13px', fontWeight: 600 }}>
+                          Brand: {analysisData.brands}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Dietary Warnings */}
+                    {Array.isArray(analysisData?.dietaryWarnings) && analysisData.dietaryWarnings.length > 0 && (
+                      <div style={{ marginBottom: '14px', padding: '10px 14px', borderRadius: '8px', background: 'var(--amber-light)', border: '1px solid var(--amber)', fontSize: '13px', color: 'var(--text)' }}>
+                        {analysisData.dietaryWarnings.map((warn: string, i: number) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: i > 0 ? '4px' : 0 }}>
+                            <AlertCircle size={14} style={{ color: 'var(--amber)', flexShrink: 0 }} />
+                            <span>{warn}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Allergens & Additives */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px', marginBottom: '16px' }}>
+                      {Array.isArray(analysisData?.allergens) && analysisData.allergens.length > 0 && (
+                        <div style={{ padding: '12px 14px', background: 'var(--surface-subtle)', borderRadius: '8px' }}>
+                          <strong style={{ display: 'block', fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '6px' }}>
+                            Allergens Detected
+                          </strong>
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                            {analysisData.allergens.map((all: string, idx: number) => (
+                              <span key={idx} style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '10px', background: '#fee2e2', color: '#991b1b', fontWeight: 600 }}>
+                                {all}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {Array.isArray(analysisData?.additives) && analysisData.additives.length > 0 && (
+                        <div style={{ padding: '12px 14px', background: 'var(--surface-subtle)', borderRadius: '8px' }}>
+                          <strong style={{ display: 'block', fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '6px' }}>
+                            Recorded Additives ({analysisData.additives.length})
+                          </strong>
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                            {analysisData.additives.map((add: string, idx: number) => (
+                              <span key={idx} style={{ fontSize: '11.5px', padding: '2px 8px', borderRadius: '10px', background: 'var(--tint)', color: 'var(--green)', fontFamily: 'var(--font-mono)' }}>
+                                {add}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Ingredients list */}
+                    {Array.isArray(analysisData?.ingredients) && analysisData.ingredients.length > 0 && (
+                      <div>
+                        <strong style={{ display: 'block', fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '8px' }}>
+                          Ingredients ({analysisData.ingredients.length})
+                        </strong>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          {analysisData.ingredients.map((ing: string, idx: number) => (
+                            <span
+                              key={idx}
+                              style={{
+                                fontSize: '12.5px',
+                                padding: '4px 10px',
+                                borderRadius: '6px',
+                                background: 'var(--surface)',
+                                border: '1px solid var(--line)',
+                                color: 'var(--text)',
+                              }}
+                            >
+                              {ing}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </section>
+                )}
 
                 {/* Total Energy Label */}
                 <section className="nutrition-label">
@@ -329,9 +466,9 @@ export function ResultPage({
                     {Math.round((calories / 2000) * 100)}% of your recommended 2,000 kcal daily target
                   </p>
                   <div className="macro-bar">
-                    <i style={{ width: `${Math.round((protein * 4 / calories) * 100)}%` }} />
-                    <i style={{ width: `${Math.round((carbs * 4 / calories) * 100)}%` }} />
-                    <i style={{ width: `${Math.round((fat * 9 / calories) * 100)}%` }} />
+                    <i style={{ width: `${calories > 0 ? Math.round((protein * 4 / calories) * 100) : 0}%` }} />
+                    <i style={{ width: `${calories > 0 ? Math.round((carbs * 4 / calories) * 100) : 0}%` }} />
+                    <i style={{ width: `${calories > 0 ? Math.round((fat * 9 / calories) * 100) : 0}%` }} />
                   </div>
                   <div className="bar-legend">
                     <span>Protein <b>{protein}g · {protein * 4} kcal</b></span>
@@ -364,15 +501,20 @@ export function ResultPage({
                 {/* Sodium and Micronutrients */}
                 <section className="sodium-row">
                   <div>
-                    <span className="label-small">SODIUM ESTIMATE</span>
-                    <strong>{sodium} mg</strong>
+                    <span className="label-small">{isPackaged ? 'SODIUM CONTENT' : 'SODIUM ESTIMATE'}</span>
+                    <strong>{isSodiumMissing ? 'Not listed' : `${sodium} mg`}</strong>
                   </div>
-                  <span className="status moderate">Moderate</span>
+                  <span className={`status ${isSodiumMissing ? 'moderate' : sodium > 600 ? 'poor' : sodium > 300 ? 'moderate' : 'good'}`}>
+                    {isSodiumMissing ? 'Not listed' : sodium > 600 ? 'High' : sodium > 300 ? 'Moderate' : 'Good'}
+                  </span>
                   <div className="line-bar">
-                    <i style={{ width: `${Math.min(100, Math.round((sodium / 2300) * 100))}%` }} />
+                    <i style={{ width: `${isSodiumMissing ? 0 : Math.min(100, Math.round((sodium / 2300) * 100))}%` }} />
                   </div>
-                  <small>{Math.round((sodium / 2300) * 100)}% of recommended daily limit (2,300 mg)</small>
+                  <small>
+                    {isSodiumMissing ? 'Sodium was not specified on product label' : `${Math.round((sodium / 2300) * 100)}% of recommended daily limit (2,300 mg)`}
+                  </small>
                 </section>
+
 
                 {/* Health Score Accordion */}
                 <section className="health-section">
@@ -721,4 +863,24 @@ async function createOptimizedThumbnail(dataUrl: string, maxDimension = 360): Pr
   })
 }
 
+function getNutriScoreBg(grade?: string): string {
+
+  const g = (grade || '').toLowerCase()
+  if (g === 'a') return '#038141'
+  if (g === 'b') return '#85bb2f'
+  if (g === 'c') return '#fecb02'
+  if (g === 'd') return '#ee8100'
+  if (g === 'e') return '#e63e11'
+  return '#67665f'
+}
+
+function getNovaBg(group?: number): string {
+  if (group === 1) return '#038141'
+  if (group === 2) return '#85bb2f'
+  if (group === 3) return '#ee8100'
+  if (group === 4) return '#c2410c'
+  return '#67665f'
+}
+
 export default ResultPage
+

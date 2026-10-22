@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import {
   ArrowRight,
+  Barcode,
   Camera,
   Check,
   FileUp,
@@ -8,6 +9,7 @@ import {
   Sparkles,
   Upload,
 } from 'lucide-react'
+
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/hooks/use-toast'
@@ -205,7 +207,71 @@ export function AnalyzePage({
           Upload or capture a photo of your meal to get a clear nutritional breakdown in seconds.
         </p>
 
+        {/* Packaged Food Barcode Scan Link Card */}
+        <div
+          onClick={() => setPage('packaged')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '14px 18px',
+            marginBottom: '20px',
+            background: 'var(--surface)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-lg)',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease',
+            boxShadow: 'var(--shadow-sm)',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.borderColor = 'var(--green)';
+            e.currentTarget.style.background = 'var(--green-light)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.borderColor = 'var(--line)';
+            e.currentTarget.style.background = 'var(--surface)';
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '8px',
+                background: 'var(--tint)',
+                color: 'var(--green)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Barcode size={20} />
+            </span>
+            <div>
+              <strong style={{ fontSize: '14px', display: 'block', color: 'var(--text)' }}>
+                Scanning a packaged product?
+              </strong>
+              <span className="muted" style={{ fontSize: '12.5px' }}>
+                Use barcode scan or label OCR for instant Open Food Facts nutrition facts.
+              </span>
+            </div>
+          </div>
+          <span
+            style={{
+              fontSize: '13px',
+              fontWeight: 600,
+              color: 'var(--green)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            Use barcode scan <ArrowRight size={14} />
+          </span>
+        </div>
+
         {state === 'upload' ? (
+
           <>
             <input
               type="file"
