@@ -482,8 +482,12 @@ export async function parseNutritionTextWithGemini(
 
   const prompt = `You are a nutrition label and ingredient list parser.
 Parse this user-pasted food label text or ingredient list.
-Extract ONLY what is explicitly mentioned in the text.
-Use null for any field not mentioned.
+
+Rules:
+- If a nutrition value is explicitly printed, copy that number.
+- If calories/protein/carbs/fat/fiber/sugar/sodium are NOT printed but an ingredient list IS present, still return the full ingredientsText. Leave those numeric fields null so the app can estimate them.
+- Never invent a product name from a comma-separated ingredient list.
+- Use null for any field you cannot support from the text.
 
 User text:
 """
@@ -563,17 +567,23 @@ export function parseLabelTextLocally(rawText: string): ExtractedLabelData {
   const servingGramsMatch = servingSize?.match(/(\d+(?:\.\d+)?)\s*g\b/i)
   const servingQuantityGrams = servingGramsMatch ? parseFloat(servingGramsMatch[1]) : null
 
-  // Extract ingredients section if introduced by "Ingredients:"
   let ingredientsText = text
-  const ingMatch = text.match(/(?:ingredients?|contains)[:\s]*([\s\S]+?)(?:\.|$)/i)
+  const ingMatch = text.match(/(?:ingredients?)\s*[:\-]\s*([\s\S]+)/i)
   if (ingMatch) {
-    ingredientsText = ingMatch[1].trim()
+    ingredientsText = ingMatch[1]
+      .replace(/\n(?:nutrition|allergen|contains|manufactured).*$/i, '')
+      .trim()
   }
 
-  // First line might be product name
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
   const firstLine = lines[0] || ''
-  const productName = (!/calories|nutrition|ingredients|facts/i.test(firstLine) && firstLine.length < 50)
+  const looksLikeIngredientList = firstLine.includes(',') || /^(sugar|wheat|milk|cocoa|palm|oil)\b/i.test(firstLine)
+  const productName = (
+    !looksLikeIngredientList &&
+    !/calories|nutrition|ingredients|facts/i.test(firstLine) &&
+    firstLine.length > 0 &&
+    firstLine.length < 60
+  )
     ? firstLine
     : 'Custom Packaged Food'
 

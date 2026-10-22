@@ -1,13 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   isValidBarcode,
   mapProductToAnalysis,
   mapLabelDataToAnalysis,
+  barcodeLookupCandidates,
+  ean13CheckDigit,
+  fetchRawProductByBarcode,
+  hasUsableProductData,
 } from '@/lib/openFoodFacts';
 import {
   evaluatePackaged,
   parseIngredientsText,
   extractAllergens,
+  estimateMacrosFromIngredients,
 } from '@/lib/packagedEvaluator';
 import { parseLabelTextLocally } from '@/lib/gemini';
 import type { PackagedProduct } from '@/types/nutrition';
@@ -25,9 +30,63 @@ describe('Barcode Validation', () => {
     expect(isValidBarcode('')).toBe(false);
     expect(isValidBarcode('1234567')).toBe(false); // too short (<8)
     expect(isValidBarcode('123456789012345')).toBe(false); // too long (>14)
-    expect(isValidBarcode('301762042200A')).toBe(false); // non-digits
     expect(isValidBarcode('barcode-123')).toBe(false);
   });
+
+  it('accepts barcodes with spaces or hyphens after digit extraction', () => {
+    expect(isValidBarcode('890 1491 100519')).toBe(true);
+    expect(isValidBarcode('890-1491-100519')).toBe(true);
+  });
+});
+
+describe('Barcode lookup candidates', () => {
+  it('computes the EAN-13 check digit for truncated Indian barcodes', () => {
+    expect(ean13CheckDigit('890149110051')).toBe('9');
+  });
+
+  it('tries the full EAN-13 first when the check digit was omitted', () => {
+    const candidates = barcodeLookupCandidates('890149110051');
+    expect(candidates[0]).toBe('8901491100519');
+    expect(candidates).toContain('890149110051');
+  });
+
+  it('pads UPC-A codes that start with 0 to EAN-13', () => {
+    const candidates = barcodeLookupCandidates('049000042566');
+    expect(candidates).toContain('049000042566');
+    expect(candidates).toContain('0049000042566');
+  });
+
+  it('resolves a truncated Indian barcode via the EAN-13 check-digit variant', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/8901491100519.json')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({
+            status: 1,
+            product: {
+              code: '8901491100519',
+              product_name: 'Kurkure',
+              brands: 'Kurkure',
+            },
+          }),
+        } as Response;
+      }
+      return { status: 404, ok: false, json: async () => ({ status: 0 }) } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const product = await fetchRawProductByBarcode('890149110051');
+    expect(product?.product_name).toBe('Kurkure');
+    expect(product?.code).toBe('8901491100519');
+    expect(fetchMock).toHaveBeenCalled();
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('Ingredient Parsing & Allergen Extraction', () => {
@@ -196,5 +255,56 @@ Ingredients: 100% Whole Grain Rolled Oats.
     expect(mapped.foodName).toContain("Nature's Choice");
     expect(mapped.calories).toBe(150);
     expect(mapped.source).toBe('label');
+  });
+
+  it('keeps a long ingredient list instead of cutting at the first period', () => {
+    const text = 'Ingredients: Sugar, cocoa butter, skimmed milk powder, cocoa mass, vegetable fat, emulsifiers (soya lecithin), flavourings.';
+    const parsed = parseLabelTextLocally(text);
+    expect(parsed.ingredientsText).toContain('skimmed milk powder');
+    expect(parsed.ingredientsText).toContain('flavourings');
+    expect(parsed.productName).toBe('Custom Packaged Food');
+  });
+});
+
+describe('Incomplete Open Food Facts records', () => {
+  it('treats name-only catalog hits as unusable', () => {
+    expect(hasUsableProductData({
+      product_name: 'Cadbury dairy milk',
+      brands: 'Cadbury',
+      barcode: '7622210063465',
+    })).toBe(false);
+  });
+
+  it('accepts products that have ingredients even without nutriments', () => {
+    expect(hasUsableProductData({
+      product_name: 'Cadbury dairy milk',
+      ingredients_text: 'Sugar, cocoa butter, milk',
+    })).toBe(true);
+  });
+});
+
+describe('Ingredient macro estimates', () => {
+  it('approximates chocolate-like macros from an ingredient list', () => {
+    const estimated = estimateMacrosFromIngredients(
+      'Sugar, cocoa butter, skimmed milk powder, cocoa mass, vegetable fat, emulsifiers (soya lecithin), flavourings'
+    );
+    expect(estimated).not.toBeNull();
+    expect(estimated!.calories).toBeGreaterThan(350);
+    expect(estimated!.fat).toBeGreaterThan(20);
+    expect(estimated!.sugar).toBeGreaterThan(15);
+    expect(estimated!.protein).toBeGreaterThan(0);
+  });
+
+  it('maps pasted ingredients into a real packaged analysis instead of zeros', () => {
+    const parsed = parseLabelTextLocally(
+      'Ingredients: Sugar, cocoa butter, skimmed milk powder, cocoa mass, vegetable fat, emulsifiers (soya lecithin), flavourings.'
+    );
+    const mapped = mapLabelDataToAnalysis(parsed);
+    expect(mapped.source).toBe('label');
+    expect(mapped.isPackaged).toBe(true);
+    expect(mapped.nutritionEstimated).toBe(true);
+    expect(mapped.calories).toBeGreaterThan(0);
+    expect(mapped.ingredients.length).toBeGreaterThan(2);
+    expect(mapped.foodName.toLowerCase()).not.toContain('no food');
   });
 });

@@ -44,6 +44,7 @@ export interface PackagedProduct {
   code?: string;
   barcode?: string;
   product_name?: string;
+  product_name_en?: string;
   brands?: string;
   quantity?: string;
   serving_size?: string;
@@ -53,9 +54,11 @@ export interface PackagedProduct {
   allergens_tags?: string[];
   additives_tags?: string[];
   nutriscore_grade?: string;
+  nutrition_grades?: string;
   nova_group?: number;
-  nutriments?: Record<string, number | undefined>;
+  nutriments?: Record<string, number | string | undefined>;
   image_front_url?: string;
+  image_url?: string;
 }
 
 export interface PackagedAnalysis {
@@ -93,6 +96,8 @@ export interface PackagedAnalysis {
   additives?: string[];
   dietaryWarnings?: string[];
   missingFields?: string[];
+  estimatedFields?: string[];
+  nutritionEstimated?: boolean;
   isPackaged?: boolean;
 }
 

@@ -36,9 +36,9 @@ interface PackagedScanPageProps {
 
 // Famous reference barcodes for instant 1-click testing
 const POPULAR_SAMPLES = [
+  { name: 'Kurkure Masala Munch', barcode: '8901491100519' },
   { name: 'Nutella Hazelnut Spread', barcode: '3017620422003' },
   { name: 'Oreo Original Cookies', barcode: '7622210449283' },
-  { name: 'Barilla Spaghetti No. 5', barcode: '8076809513753' },
   { name: 'Coca-Cola Original', barcode: '5449000000996' },
 ];
 
@@ -86,7 +86,7 @@ export function PackagedScanPage({
   // ── 1. Lookup by Barcode (Open Food Facts) ──────────────────────────────────
   const handleBarcodeLookup = async (codeToSearch?: string) => {
     if (!checkAuth()) return;
-    const code = (codeToSearch || barcodeInput).trim();
+    const code = (codeToSearch || barcodeInput).trim().replace(/\D/g, '');
 
     if (!isValidBarcode(code)) {
       toast({
@@ -105,10 +105,12 @@ export function PackagedScanPage({
       const result = await fetchProductByBarcode(code, profile);
 
       if (!result) {
+        sessionStorage.removeItem('nutriscan_last_image');
         setNotFoundBarcode(code);
+        setActiveTab('label');
         toast({
-          title: 'Product not found',
-          description: `Barcode ${code} was not found in Open Food Facts. You can photograph or paste the nutrition label below.`,
+          title: 'Not found in Open Food Facts',
+          description: 'This product has not been indexed with nutrition or ingredients. Photograph the label or paste the ingredient list, then press Evaluate.',
           variant: 'destructive',
         });
         return;
@@ -116,6 +118,8 @@ export function PackagedScanPage({
 
       if (result.imageUrl) {
         sessionStorage.setItem('nutriscan_last_image', result.imageUrl);
+      } else {
+        sessionStorage.removeItem('nutriscan_last_image');
       }
 
       toast({
@@ -203,7 +207,7 @@ export function PackagedScanPage({
               if (videoRef.current.readyState >= 2) {
                 const barcodes = await detector.detect(videoRef.current);
                 if (barcodes.length > 0 && barcodes[0].rawValue) {
-                  const detected = barcodes[0].rawValue;
+                  const detected = String(barcodes[0].rawValue).replace(/\D/g, '');
                   stopCamera();
                   setBarcodeInput(detected);
                   handleBarcodeLookup(detected);
@@ -231,7 +235,7 @@ export function PackagedScanPage({
       if (videoRef.current) {
         codeReader.decodeFromVideoElement(videoRef.current, (result) => {
           if (result && result.getText()) {
-            const detected = result.getText();
+            const detected = result.getText().replace(/\D/g, '');
             stopCamera();
             setBarcodeInput(detected);
             handleBarcodeLookup(detected);
@@ -325,22 +329,39 @@ export function PackagedScanPage({
     }
 
     setLoading(true);
+    setNotFoundBarcode(null);
     setLoadingMessage('Parsing ingredients and calculating nutritional metrics...');
 
     try {
-      // 1. Try Gemini text parsing if API key is configured
-      let extracted = await parseNutritionTextWithGemini(pastedText);
+      const localExtracted = parseLabelTextLocally(pastedText);
+      const geminiExtracted = await parseNutritionTextWithGemini(pastedText);
+      const extracted = geminiExtracted
+        ? {
+            ...localExtracted,
+            ...geminiExtracted,
+            productName: geminiExtracted.productName || localExtracted.productName,
+            brand: geminiExtracted.brand || localExtracted.brand,
+            servingSize: geminiExtracted.servingSize || localExtracted.servingSize,
+            servingQuantityGrams: geminiExtracted.servingQuantityGrams ?? localExtracted.servingQuantityGrams,
+            calories: geminiExtracted.calories ?? localExtracted.calories,
+            protein: geminiExtracted.protein ?? localExtracted.protein,
+            carbs: geminiExtracted.carbs ?? localExtracted.carbs,
+            fat: geminiExtracted.fat ?? localExtracted.fat,
+            saturatedFat: geminiExtracted.saturatedFat ?? localExtracted.saturatedFat,
+            fiber: geminiExtracted.fiber ?? localExtracted.fiber,
+            sugar: geminiExtracted.sugar ?? localExtracted.sugar,
+            sodium: geminiExtracted.sodium ?? localExtracted.sodium,
+            ingredientsText: geminiExtracted.ingredientsText || localExtracted.ingredientsText,
+            allergens: geminiExtracted.allergens?.length ? geminiExtracted.allergens : localExtracted.allergens,
+          }
+        : localExtracted;
 
-      // 2. Fall back to robust regex text parser if Gemini is absent or fails
-      if (!extracted) {
-        extracted = parseLabelTextLocally(pastedText);
-      }
-
+      sessionStorage.removeItem('nutriscan_last_image');
       const result = mapLabelDataToAnalysis(extracted, profile);
 
       toast({
-        title: 'Analysis complete',
-        description: `${result.foodName} parsed from label text.`,
+        title: result.nutritionEstimated ? 'Estimated from ingredients' : 'Analysis complete',
+        description: `${result.foodName} evaluated from the text you pasted.`,
       });
 
       onAnalysisComplete(result);
@@ -411,7 +432,8 @@ export function PackagedScanPage({
                 Barcode {notFoundBarcode} not found in Open Food Facts
               </strong>
               <p style={{ margin: '0 0 12px', fontSize: '13.5px', color: 'var(--muted)' }}>
-                This product hasn&apos;t been indexed in the public database yet. You can photograph the printed nutrition label or paste its ingredient text instead.
+                This product hasn&apos;t been indexed in the public database, or it has no nutrition/ingredients yet.
+                Photograph the printed food label or paste the ingredient list below, then press Evaluate.
               </p>
               <Button
                 size="sm"

@@ -87,8 +87,13 @@ export function ResultPage({
 
   // ─── Detect non-food result ───────────────────────────────────────────────
   const rawDishName = analysisData?.foodName || 'Meal'
+  const isPackagedPreview =
+    analysisData?.source === 'openfoodfacts' ||
+    analysisData?.source === 'label' ||
+    Boolean(analysisData?.isPackaged)
   const isNotFood =
     !isFromHistory &&
+    !isPackagedPreview &&
     (
       Boolean(analysisData?.isNotFood) ||
       rawDishName.toLowerCase() === 'not food' ||
@@ -110,10 +115,13 @@ export function ResultPage({
     ? (Number(analysisData?.healthScore?.score) || 70)
     : (Number(analysisData?.healthScore) || 70)
   
-  // NEVER leak unrelated last image if opened from history
+  // Use only this analysis's photo. Do not reuse a previous scan's package image
+  // (e.g. Maggi leftover in sessionStorage on a custom ingredient evaluation).
   const uploadedPhoto =
     analysisData?.imageUrl ||
-    (!isFromHistory && typeof window !== 'undefined'
+    (!isFromHistory &&
+    !isPackagedPreview &&
+    typeof window !== 'undefined'
       ? sessionStorage.getItem('nutriscan_last_image')
       : null)
   const image = uploadedPhoto || null
@@ -251,8 +259,16 @@ export function ResultPage({
     }
   }
 
-  const isPackaged = analysisData?.source === 'openfoodfacts' || analysisData?.source === 'label' || Boolean(analysisData?.isPackaged)
+  const isPackaged = isPackagedPreview
   const missingFields: string[] = Array.isArray(analysisData?.missingFields) ? analysisData.missingFields : []
+  const estimatedFields: string[] = Array.isArray(analysisData?.estimatedFields) ? analysisData.estimatedFields : []
+  const nutritionEstimated = Boolean(analysisData?.nutritionEstimated)
+
+  const formatMacro = (field: string, value: number, unit: string) => {
+    if (isPackaged && missingFields.includes(field)) return 'Not listed'
+    const prefix = estimatedFields.includes(field) ? '~' : ''
+    return `${prefix}${value}${unit}`
+  }
 
   const isFiberMissing = isPackaged && missingFields.includes('fiber')
   const isSugarMissing = isPackaged && missingFields.includes('sugar')
@@ -261,12 +277,12 @@ export function ResultPage({
   const isFatMissing = isPackaged && missingFields.includes('fat')
   const isSodiumMissing = isPackaged && missingFields.includes('sodium')
 
-  const macrosList = calories > 0 || (isPackaged && (protein > 0 || carbs > 0 || fat > 0)) ? [
-    ['Protein', isProteinMissing ? 'Not listed' : `${protein}g`, isProteinMissing ? '—' : `${Math.round(protein * 4)} kcal`, isProteinMissing || calories <= 0 ? '—' : `${Math.round((protein * 4 / calories) * 100)}%`, 'green'],
-    ['Carbs', isCarbsMissing ? 'Not listed' : `${carbs}g`, isCarbsMissing ? '—' : `${Math.round(carbs * 4)} kcal`, isCarbsMissing || calories <= 0 ? '—' : `${Math.round((carbs * 4 / calories) * 100)}%`, 'amber'],
-    ['Fat', isFatMissing ? 'Not listed' : `${fat}g`, isFatMissing ? '—' : `${Math.round(fat * 9)} kcal`, isFatMissing || calories <= 0 ? '—' : `${Math.round((fat * 9 / calories) * 100)}%`, 'orange'],
-    ['Fiber', isFiberMissing ? 'Not listed' : `${fiber}g`, '—', isFiberMissing ? '—' : (isPackaged ? `${Math.round((fiber / 28) * 100)}%` : '12%'), 'green'],
-    ['Sugar', isSugarMissing ? 'Not listed' : `${sugar}g`, '—', isSugarMissing ? '—' : (isPackaged ? `${Math.round((sugar / 50) * 100)}%` : '8%'), 'orange'],
+  const macrosList = calories > 0 || (isPackaged && (protein > 0 || carbs > 0 || fat > 0 || nutritionEstimated)) ? [
+    ['Protein', formatMacro('protein', protein, 'g'), isProteinMissing ? '—' : `${Math.round(protein * 4)} kcal`, isProteinMissing || calories <= 0 ? '—' : `${Math.round((protein * 4 / calories) * 100)}%`, 'green'],
+    ['Carbs', formatMacro('carbs', carbs, 'g'), isCarbsMissing ? '—' : `${Math.round(carbs * 4)} kcal`, isCarbsMissing || calories <= 0 ? '—' : `${Math.round((carbs * 4 / calories) * 100)}%`, 'amber'],
+    ['Fat', formatMacro('fat', fat, 'g'), isFatMissing ? '—' : `${Math.round(fat * 9)} kcal`, isFatMissing || calories <= 0 ? '—' : `${Math.round((fat * 9 / calories) * 100)}%`, 'orange'],
+    ['Fiber', formatMacro('fiber', fiber, 'g'), '—', isFiberMissing ? '—' : (isPackaged ? `${Math.round((fiber / 28) * 100)}%` : '12%'), 'green'],
+    ['Sugar', formatMacro('sugar', sugar, 'g'), '—', isSugarMissing ? '—' : (isPackaged ? `${Math.round((sugar / 50) * 100)}%` : '8%'), 'orange'],
   ] : []
 
 
@@ -331,6 +347,11 @@ export function ResultPage({
                     <span className="muted" style={{ fontSize: '13px', fontFamily: 'var(--font-mono)' }}>
                       Portion: {analysisData?.servingSize || (isPackaged ? 'Not specified' : '1 serving (approx 300g)')}
                     </span>
+                    {nutritionEstimated && (
+                      <p style={{ margin: '8px 0 0', fontSize: '13px', color: 'var(--amber)' }}>
+                        Macros marked with ~ are approximate values estimated from the ingredient list. Paste the printed nutrition panel for exact numbers.
+                      </p>
+                    )}
                   </div>
                 </section>
 
@@ -350,7 +371,11 @@ export function ResultPage({
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <Barcode size={18} style={{ color: 'var(--green)' }} />
                         <span className="label-small" style={{ color: 'var(--green)' }}>
-                          {analysisData?.source === 'openfoodfacts' ? 'VERIFIED OPEN FOOD FACTS DATA' : 'PACKAGED LABEL DATA'}
+                          {analysisData?.source === 'openfoodfacts'
+                            ? 'VERIFIED OPEN FOOD FACTS DATA'
+                            : nutritionEstimated
+                              ? 'ESTIMATED FROM INGREDIENTS'
+                              : 'PACKAGED LABEL DATA'}
                         </span>
                       </div>
                       {analysisData?.barcode && (
@@ -460,7 +485,7 @@ export function ResultPage({
                 <section className="nutrition-label">
                   <div className="label-title">TOTAL ENERGY</div>
                   <div className="big-number">
-                    {calories} <small>kcal</small>
+                    {estimatedFields.includes('calories') ? '~' : ''}{calories} <small>kcal</small>
                   </div>
                   <p className="muted" style={{ margin: '4px 0 0', fontSize: '13px' }}>
                     {Math.round((calories / 2000) * 100)}% of your recommended 2,000 kcal daily target
@@ -502,7 +527,7 @@ export function ResultPage({
                 <section className="sodium-row">
                   <div>
                     <span className="label-small">{isPackaged ? 'SODIUM CONTENT' : 'SODIUM ESTIMATE'}</span>
-                    <strong>{isSodiumMissing ? 'Not listed' : `${sodium} mg`}</strong>
+                    <strong>{isSodiumMissing ? 'Not listed' : formatMacro('sodium', sodium, ' mg')}</strong>
                   </div>
                   <span className={`status ${isSodiumMissing ? 'moderate' : sodium > 600 ? 'poor' : sodium > 300 ? 'moderate' : 'good'}`}>
                     {isSodiumMissing ? 'Not listed' : sodium > 600 ? 'High' : sodium > 300 ? 'Moderate' : 'Good'}

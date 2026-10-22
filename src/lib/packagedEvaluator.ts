@@ -177,6 +177,11 @@ export function evaluatePackaged(
   servingCaloriesOverride?: number
 ): EvaluatedHealth {
   const nutriments = product.nutriments || {};
+  const nutrient = (key: string): number => {
+    const value = nutriments[key];
+    const parsed = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
 
   // 1. Nutri-Score Base
   const grade = (product.nutriscore_grade || '').toLowerCase();
@@ -196,11 +201,11 @@ export function evaluatePackaged(
   }
 
   // 3. Nutriments (per 100g)
-  const sugar = nutriments['sugars_100g'] ?? nutriments['sugars'] ?? 0;
-  const sodiumMg = (nutriments['sodium_100g'] ?? 0) * 1000 || ((nutriments['salt_100g'] ?? 0) * 400);
-  const satFat = nutriments['saturated-fat_100g'] ?? nutriments['saturated_fat_100g'] ?? 0;
-  const fiber = nutriments['fiber_100g'] ?? nutriments['fiber'] ?? 0;
-  const protein = nutriments['proteins_100g'] ?? nutriments['proteins'] ?? 0;
+  const sugar = nutrient('sugars_100g') || nutrient('sugars');
+  const sodiumMg = nutrient('sodium_100g') * 1000 || nutrient('salt_100g') * 400;
+  const satFat = nutrient('saturated-fat_100g') || nutrient('saturated_fat_100g');
+  const fiber = nutrient('fiber_100g') || nutrient('fiber');
+  const protein = nutrient('proteins_100g') || nutrient('proteins');
 
   // Sugar penalties
   if (sugar > 22) score -= 14;
@@ -263,7 +268,7 @@ export function evaluatePackaged(
     }
 
     // Calorie portion check against daily calorie target
-    const servingCals = servingCaloriesOverride ?? nutriments['energy-kcal_100g'] ?? 0;
+    const servingCals = servingCaloriesOverride ?? nutrient('energy-kcal_100g');
     if (profile.daily_calorie_target && profile.daily_calorie_target > 0 && servingCals > 0) {
       const pct = (servingCals / profile.daily_calorie_target) * 100;
       if (pct > 30) {
@@ -320,5 +325,180 @@ export function evaluatePackaged(
     allergens,
     additives,
     dietaryWarnings,
+  };
+}
+
+export interface EstimatedMacros {
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  fiber: number;
+  sugar: number;
+  sodium: number;
+}
+
+type MacroProfile = EstimatedMacros;
+
+const DEFAULT_MIXED: MacroProfile = {
+  calories: 260,
+  protein: 6,
+  carbs: 32,
+  fat: 12,
+  fiber: 2,
+  sugar: 8,
+  sodium: 220,
+};
+
+function profileForIngredient(name: string): MacroProfile {
+  const n = name.toLowerCase();
+
+  if (/salt|sodium chloride/.test(n)) {
+    return { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0, sodium: 38700 };
+  }
+  if (/water|aqua/.test(n)) {
+    return { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0, sodium: 0 };
+  }
+  if (/emulsifier|stabiliser|stabilizer|preservative|flavour|flavor|colour|color|lecithin|vanillin|additive|\be\d{3}\b/.test(n)) {
+    return { calories: 40, protein: 0, carbs: 4, fat: 2, fiber: 0, sugar: 0, sodium: 80 };
+  }
+  if (/sugar|sucrose|glucose|fructose|dextrose|honey|syrup|jaggery|maltose|invert/.test(n)) {
+    return { calories: 387, protein: 0, carbs: 100, fat: 0, fiber: 0, sugar: 99, sodium: 2 };
+  }
+  if (/cocoa butter|cocoa fat/.test(n)) {
+    return { calories: 884, protein: 0, carbs: 0, fat: 100, fiber: 0, sugar: 0, sodium: 0 };
+  }
+  if (/palm|olein|vegetable oil|sunflower|canola|rapeseed|soybean oil|coconut oil|ghee|butter|shortening|oil and fat/.test(n)) {
+    return { calories: 884, protein: 0, carbs: 0, fat: 100, fiber: 0, sugar: 0, sodium: 0 };
+  }
+  if (/milk powder|milk solids|skimmed milk|whole milk powder|whey|casein/.test(n)) {
+    return { calories: 496, protein: 26, carbs: 38, fat: 27, fiber: 0, sugar: 38, sodium: 370 };
+  }
+  if (/\bmilk\b|cream|yogurt|yoghurt|cheese/.test(n)) {
+    return { calories: 64, protein: 3.3, carbs: 5, fat: 3.6, fiber: 0, sugar: 5, sodium: 44 };
+  }
+  if (/cocoa mass|cocoa powder|cocoa|chocolate/.test(n)) {
+    return { calories: 228, protein: 20, carbs: 58, fat: 14, fiber: 33, sugar: 2, sodium: 20 };
+  }
+  if (/almond|cashew|walnut|hazelnut|pistachio|peanut|nut/.test(n)) {
+    return { calories: 607, protein: 20, carbs: 21, fat: 54, fiber: 9, sugar: 4, sodium: 5 };
+  }
+  if (/oat|wheat|flour|rice meal|corn meal|maize|starch|maltodextrin|cereal|gram meal/.test(n)) {
+    return { calories: 364, protein: 10, carbs: 76, fat: 1, fiber: 3, sugar: 1, sodium: 2 };
+  }
+  if (/lentil|chickpea|bean|dal|pulse/.test(n)) {
+    return { calories: 350, protein: 22, carbs: 60, fat: 2, fiber: 15, sugar: 2, sodium: 15 };
+  }
+  if (/tomato|onion|garlic|spice|chilli|chili|pepper|seasoning|herb/.test(n)) {
+    return { calories: 80, protein: 3, carbs: 15, fat: 1, fiber: 4, sugar: 5, sodium: 40 };
+  }
+  if (/chicken|beef|pork|meat|fish|egg/.test(n)) {
+    return { calories: 180, protein: 26, carbs: 0, fat: 8, fiber: 0, sugar: 0, sodium: 70 };
+  }
+
+  return DEFAULT_MIXED;
+}
+
+function parseIngredientShares(rawText: string): Array<{ name: string; percent: number | null }> {
+  const tokens: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const char of rawText.replace(/[•·*]/g, ',')) {
+    if (char === '(' || char === '[' || char === '{') {
+      depth++;
+      current += char;
+    } else if (char === ')' || char === ']' || char === '}') {
+      depth = Math.max(0, depth - 1);
+      current += char;
+    } else if ((char === ',' || char === ';') && depth === 0) {
+      if (current.trim()) tokens.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  if (current.trim()) tokens.push(current.trim());
+
+  return tokens
+    .map((token) => {
+      const percentMatch = token.match(/(\d+(?:\.\d+)?)\s*%/);
+      const name = token
+        .replace(/\b\d+(?:\.\d+)?\s*%/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return {
+        name,
+        percent: percentMatch ? Number(percentMatch[1]) : null,
+      };
+    })
+    .filter((item) => item.name.length >= 2)
+    .slice(0, 20);
+}
+
+/**
+ * Approximate per-serving macros from a printed ingredient list when nutrition facts are missing.
+ * Uses typical USDA-style densities and listed percentages when present.
+ */
+export function estimateMacrosFromIngredients(
+  rawText: string,
+  servingGrams = 100
+): EstimatedMacros | null {
+  const items = parseIngredientShares(rawText);
+  if (items.length === 0) return null;
+
+  const declared = items.filter((item) => item.percent !== null && (item.percent as number) > 0);
+  const declaredTotal = declared.reduce((sum, item) => sum + (item.percent as number), 0);
+  const remaining = Math.max(0, 100 - declaredTotal);
+  const undeclared = items.filter((item) => item.percent === null);
+  const geometric = undeclared.map((_, index) => Math.pow(0.55, index));
+  const geoSum = geometric.reduce((sum, w) => sum + w, 0) || 1;
+
+  const weights = items.map((item, index) => {
+    const isSalt = /salt|sodium chloride/i.test(item.name);
+    if (item.percent !== null && item.percent > 0) {
+      return isSalt ? Math.min(item.percent, 3) : item.percent;
+    }
+    const undeclaredIndex = undeclared.indexOf(item);
+    const share = remaining * (geometric[undeclaredIndex] / geoSum);
+    if (isSalt) return Math.min(share, 1.2);
+    // Tiny weight for late additives so they don't dominate
+    if (index >= 8) return Math.min(share, 1.5);
+    return share;
+  });
+
+  const weightSum = weights.reduce((sum, w) => sum + w, 0) || 1;
+  const per100: MacroProfile = {
+    calories: 0,
+    protein: 0,
+    carbs: 0,
+    fat: 0,
+    fiber: 0,
+    sugar: 0,
+    sodium: 0,
+  };
+
+  items.forEach((item, index) => {
+    const share = weights[index] / weightSum;
+    const profile = profileForIngredient(item.name);
+    per100.calories += profile.calories * share;
+    per100.protein += profile.protein * share;
+    per100.carbs += profile.carbs * share;
+    per100.fat += profile.fat * share;
+    per100.fiber += profile.fiber * share;
+    per100.sugar += profile.sugar * share;
+    per100.sodium += profile.sodium * share;
+  });
+
+  const scale = Math.max(5, servingGrams) / 100;
+  const round1 = (value: number) => Math.round(value * 10) / 10;
+
+  return {
+    calories: Math.round(per100.calories * scale),
+    protein: round1(per100.protein * scale),
+    carbs: round1(per100.carbs * scale),
+    fat: round1(per100.fat * scale),
+    fiber: round1(per100.fiber * scale),
+    sugar: round1(per100.sugar * scale),
+    sodium: Math.round(per100.sodium * scale),
   };
 }

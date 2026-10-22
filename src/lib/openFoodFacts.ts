@@ -1,19 +1,138 @@
 import type { PackagedProduct, PackagedAnalysis } from '@/types/nutrition';
 import type { Profile } from '@/types/database';
 import type { ExtractedLabelData } from './gemini';
-import { evaluatePackaged } from './packagedEvaluator';
+import { evaluatePackaged, estimateMacrosFromIngredients } from './packagedEvaluator';
 
 
 const CACHE_PREFIX = 'nutriscan_off_';
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const LOOKUP_TIMEOUT_MS = 15000;
+const PRODUCT_FIELDS = [
+  'code',
+  'product_name',
+  'product_name_en',
+  'brands',
+  'quantity',
+  'serving_size',
+  'serving_quantity',
+  'ingredients_text',
+  'ingredients_text_en',
+  'allergens_tags',
+  'additives_tags',
+  'nutriscore_grade',
+  'nutrition_grades',
+  'nova_group',
+  'nutriments',
+  'image_front_url',
+  'image_url',
+].join(',');
+
+export class BarcodeLookupError extends Error {
+  constructor(
+    message: string,
+    public readonly kind: 'network' | 'invalid' = 'network'
+  ) {
+    super(message);
+    this.name = 'BarcodeLookupError';
+  }
+}
+
+/**
+ * Strip spaces, hyphens, and other non-digits that packaging / scanners often include.
+ */
+export function digitsOnly(barcode: string): string {
+  return (barcode || '').replace(/\D/g, '');
+}
 
 /**
  * Validates whether a given string is a valid EAN/UPC barcode (8 to 14 numeric digits).
  */
 export function isValidBarcode(barcode: string): boolean {
   if (!barcode) return false;
-  const trimmed = barcode.trim();
-  return /^\d{8,14}$/.test(trimmed);
+  return /^\d{8,14}$/.test(digitsOnly(barcode));
+}
+
+/** EAN-13 check digit from the first 12 digits (odd positions ×1, even ×3, 1-indexed). */
+export function ean13CheckDigit(first12: string): string {
+  let sum = 0;
+  for (let i = 0; i < 12; i++) {
+    const n = Number(first12[i]);
+    sum += i % 2 === 0 ? n : n * 3;
+  }
+  return String((10 - (sum % 10)) % 10);
+}
+
+/** UPC-A check digit from the first 11 digits. */
+export function upcACheckDigit(first11: string): string {
+  let sum = 0;
+  for (let i = 0; i < 11; i++) {
+    const n = Number(first11[i]);
+    sum += i % 2 === 0 ? n * 3 : n;
+  }
+  return String((10 - (sum % 10)) % 10);
+}
+
+/**
+ * Build lookup variants for the same physical barcode.
+ * Manual entry and some scanners drop the check digit or leading zero, which Open Food Facts
+ * treats as a different code (e.g. 890149110051 vs indexed 8901491100519).
+ */
+export function barcodeLookupCandidates(barcode: string): string[] {
+  const digits = digitsOnly(barcode);
+  const candidates: string[] = [];
+  const add = (code: string) => {
+    if (/^\d{8,14}$/.test(code) && !candidates.includes(code)) {
+      candidates.push(code);
+    }
+  };
+
+  if (digits.length !== 12) {
+    add(digits);
+  }
+
+  if (digits.length === 8) {
+    add(digits.padStart(13, '0'));
+  }
+
+  if (digits.length === 11) {
+    const upc = digits + upcACheckDigit(digits);
+    add(upc);
+    add('0' + upc);
+  }
+
+  if (digits.length === 12) {
+    const ean13 = digits + ean13CheckDigit(digits);
+    // Truncated EAN-13 is the usual miss for Indian GS1-890 packs typed without the check digit.
+    if (digits.startsWith('0')) {
+      add(digits);
+      add('0' + digits);
+      add(ean13);
+    } else {
+      add(ean13);
+      add(digits);
+      add('0' + digits);
+    }
+  }
+
+  if (digits.length === 13) {
+    if (digits.startsWith('0')) {
+      add(digits.slice(1));
+    }
+    const recomputed = digits.slice(0, 12) + ean13CheckDigit(digits.slice(0, 12));
+    add(recomputed);
+  }
+
+  if (digits.length === 14) {
+    add(digits.slice(1));
+    const stripped = digits.replace(/^0+/, '');
+    add(stripped);
+    if (stripped.length === 12) {
+      add(stripped + ean13CheckDigit(stripped));
+    }
+    add(stripped.padStart(13, '0'));
+  }
+
+  return candidates;
 }
 
 /**
@@ -54,78 +173,138 @@ function setCachedProduct(barcode: string, data: PackagedProduct): void {
   }
 }
 
+function isProductFoundPayload(data: {
+  status?: number | string;
+  product?: PackagedProduct | null;
+}): boolean {
+  if (!data?.product || typeof data.product !== 'object') return false;
+  if (data.status === 0 || data.status === '0') return false;
+  return data.status === 1 || data.status === '1' || data.status === 'success' || data.status === undefined;
+}
+
+function toPackagedProduct(code: string, raw: PackagedProduct): PackagedProduct {
+  return {
+    ...raw,
+    barcode: raw.code || raw.barcode || code,
+    code: raw.code || code,
+    product_name: raw.product_name || raw.product_name_en,
+    nutriscore_grade: raw.nutriscore_grade || raw.nutrition_grades,
+    image_front_url: raw.image_front_url || raw.image_url,
+  };
+}
+
+async function requestOpenFoodFactsProduct(
+  code: string,
+  signal: AbortSignal
+): Promise<PackagedProduct | null> {
+  const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=${PRODUCT_FIELDS}`;
+
+  const res = await fetch(url, {
+    method: 'GET',
+    signal,
+  });
+
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new BarcodeLookupError(
+      `Open Food Facts returned HTTP ${res.status}. Please try again in a moment.`,
+      'network'
+    );
+  }
+
+  const data = await res.json();
+  if (!isProductFoundPayload(data)) return null;
+  return toPackagedProduct(code, data.product as PackagedProduct);
+}
+
+function cacheProductAliases(aliases: string[], product: PackagedProduct): void {
+  const unique = Array.from(new Set(aliases.filter(Boolean)));
+  unique.forEach((alias) => setCachedProduct(alias, product));
+}
+
 /**
  * Fetches raw product data from Open Food Facts API v2.
+ * Tries check-digit / UPC-EAN variants so truncated codes still resolve.
  */
 export async function fetchRawProductByBarcode(barcode: string): Promise<PackagedProduct | null> {
-  const cleanBarcode = barcode.trim();
-  if (!isValidBarcode(cleanBarcode)) {
+  const candidates = barcodeLookupCandidates(barcode);
+  if (candidates.length === 0) {
     return null;
   }
 
-  // Check cache first
-  const cached = getCachedProduct(cleanBarcode);
-  if (cached) {
-    return cached;
+  for (const code of candidates) {
+    const cached = getCachedProduct(code);
+    if (cached) return cached;
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  let lastNetworkError: unknown = null;
 
-  const fields = [
-    'product_name',
-    'brands',
-    'quantity',
-    'serving_size',
-    'serving_quantity',
-    'ingredients_text',
-    'ingredients_text_en',
-    'allergens_tags',
-    'additives_tags',
-    'nutriscore_grade',
-    'nova_group',
-    'nutriments',
-    'image_front_url',
-  ].join(',');
+  for (const code of candidates) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), LOOKUP_TIMEOUT_MS);
 
-  const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(cleanBarcode)}.json?fields=${fields}`;
+    try {
+      const product = await requestOpenFoodFactsProduct(code, controller.signal);
+      clearTimeout(timeoutId);
+      if (!product) continue;
 
-  try {
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-      },
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!res.ok) return null;
-
-    const data = await res.json();
-    if (data.status !== 1 || !data.product) {
-      return null;
+      cacheProductAliases(
+        [...candidates, product.code || '', product.barcode || '', digitsOnly(barcode)],
+        product
+      );
+      return product;
+    } catch (err) {
+      clearTimeout(timeoutId);
+      lastNetworkError = err;
+      console.warn(`Open Food Facts lookup failed for barcode ${code}:`, err);
     }
-
-    const product: PackagedProduct = {
-      barcode: cleanBarcode,
-      code: cleanBarcode,
-      ...data.product,
-    };
-
-    setCachedProduct(cleanBarcode, product);
-    return product;
-  } catch (err) {
-    clearTimeout(timeoutId);
-    console.warn(`Open Food Facts lookup failed for barcode ${cleanBarcode}:`, err);
-    return null;
   }
+
+  if (lastNetworkError) {
+    if (lastNetworkError instanceof BarcodeLookupError) throw lastNetworkError;
+    throw new BarcodeLookupError(
+      'Could not reach Open Food Facts. Check your connection and try again.',
+      'network'
+    );
+  }
+
+  return null;
 }
 
 /**
  * Maps raw Open Food Facts product data into the app's standard analysis shape.
  */
+function toNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+/** True when OFF returned enough data to analyze (nutrition facts and/or ingredients). */
+export function hasUsableProductData(product: PackagedProduct): boolean {
+  const nutriments = product.nutriments || {};
+  const hasMacro = [
+    'energy-kcal_100g',
+    'energy-kcal',
+    'energy_100g',
+    'proteins_100g',
+    'carbohydrates_100g',
+    'fat_100g',
+    'sugars_100g',
+  ].some((key) => toNumber(nutriments[key]) !== null);
+  const hasIngredients = Boolean(
+    (product.ingredients_text || product.ingredients_text_en || '').trim()
+  );
+  return hasMacro || hasIngredients;
+}
+
+function roundMacro(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
 export function mapProductToAnalysis(
   product: PackagedProduct,
   profile?: Profile | null
@@ -134,23 +313,21 @@ export function mapProductToAnalysis(
   const missingFields: string[] = [];
 
   // Energy in kcal
-  let energy100g: number | null = null;
-  if (typeof nutriments['energy-kcal_100g'] === 'number') {
-    energy100g = nutriments['energy-kcal_100g'];
-  } else if (typeof nutriments['energy-kcal'] === 'number') {
-    energy100g = nutriments['energy-kcal'];
-  } else if (typeof nutriments['energy_100g'] === 'number') {
-    energy100g = Math.round(nutriments['energy_100g'] / 4.184);
-  } else {
+  let energy100g: number | null = toNumber(nutriments['energy-kcal_100g']) ?? toNumber(nutriments['energy-kcal']);
+  const energyKj = toNumber(nutriments['energy_100g']) ?? toNumber(nutriments['energy-kj_100g']);
+  if (energy100g === null && energyKj !== null) {
+    energy100g = Math.round(energyKj / 4.184);
+  }
+  if (energy100g === null) {
     missingFields.push('calories');
   }
 
   // Macronutrients per 100g
-  const protein100g = typeof nutriments['proteins_100g'] === 'number' ? nutriments['proteins_100g'] : null;
-  const carbs100g = typeof nutriments['carbohydrates_100g'] === 'number' ? nutriments['carbohydrates_100g'] : null;
-  const fat100g = typeof nutriments['fat_100g'] === 'number' ? nutriments['fat_100g'] : null;
-  const fiber100g = typeof nutriments['fiber_100g'] === 'number' ? nutriments['fiber_100g'] : null;
-  const sugar100g = typeof nutriments['sugars_100g'] === 'number' ? nutriments['sugars_100g'] : null;
+  const protein100g = toNumber(nutriments['proteins_100g']);
+  const carbs100g = toNumber(nutriments['carbohydrates_100g']);
+  const fat100g = toNumber(nutriments['fat_100g']);
+  const fiber100g = toNumber(nutriments['fiber_100g']);
+  const sugar100g = toNumber(nutriments['sugars_100g']);
 
   if (protein100g === null) missingFields.push('protein');
   if (carbs100g === null) missingFields.push('carbs');
@@ -160,10 +337,12 @@ export function mapProductToAnalysis(
 
   // Sodium per 100g in mg
   let sodium100gMg: number | null = null;
-  if (typeof nutriments['sodium_100g'] === 'number') {
-    sodium100gMg = Math.round(nutriments['sodium_100g'] * 1000);
-  } else if (typeof nutriments['salt_100g'] === 'number') {
-    sodium100gMg = Math.round(nutriments['salt_100g'] * 400);
+  const sodiumG = toNumber(nutriments['sodium_100g']);
+  const saltG = toNumber(nutriments['salt_100g']);
+  if (sodiumG !== null) {
+    sodium100gMg = Math.round(sodiumG * 1000);
+  } else if (saltG !== null) {
+    sodium100gMg = Math.round(saltG * 400);
   } else {
     missingFields.push('sodium');
   }
@@ -196,20 +375,90 @@ export function mapProductToAnalysis(
     servingSizeText = product.serving_size;
   }
 
-  // Compute scaled numbers (defaulting to 0 where ResultPage requires numbers)
-  const calories = energy100g !== null ? Math.round(energy100g * scaleFactor) : 0;
-  const protein = protein100g !== null ? Math.round((protein100g * scaleFactor) * 10) / 10 : 0;
-  const carbs = carbs100g !== null ? Math.round((carbs100g * scaleFactor) * 10) / 10 : 0;
-  const fat = fat100g !== null ? Math.round((fat100g * scaleFactor) * 10) / 10 : 0;
-  const fiber = fiber100g !== null ? Math.round((fiber100g * scaleFactor) * 10) / 10 : 0;
-  const sugar = sugar100g !== null ? Math.round((sugar100g * scaleFactor) * 10) / 10 : 0;
-  const sodium = sodium100gMg !== null ? Math.round(sodium100gMg * scaleFactor) : 0;
+  const ingredientText = product.ingredients_text_en || product.ingredients_text || '';
+  const estimated = estimateMacrosFromIngredients(
+    ingredientText,
+    parsedServingQuantity && parsedServingQuantity > 0 ? parsedServingQuantity : 100
+  );
+  const estimatedFields: string[] = [];
 
-  // Run packaged nutrition evaluator
-  const evaluation = evaluatePackaged(product, profile, calories);
+  const takeMacro = (
+    listed: number | null,
+    estimatedValue: number | undefined,
+    field: string,
+    asInt = false
+  ): number => {
+    if (listed !== null) return asInt ? Math.round(listed) : roundMacro(listed);
+    if (estimatedValue !== undefined) {
+      estimatedFields.push(field);
+      return asInt ? Math.round(estimatedValue) : roundMacro(estimatedValue);
+    }
+    return 0;
+  };
+
+  const calories = takeMacro(
+    energy100g !== null ? energy100g * scaleFactor : null,
+    estimated?.calories,
+    'calories',
+    true
+  );
+  const protein = takeMacro(
+    protein100g !== null ? protein100g * scaleFactor : null,
+    estimated?.protein,
+    'protein'
+  );
+  const carbs = takeMacro(
+    carbs100g !== null ? carbs100g * scaleFactor : null,
+    estimated?.carbs,
+    'carbs'
+  );
+  const fat = takeMacro(
+    fat100g !== null ? fat100g * scaleFactor : null,
+    estimated?.fat,
+    'fat'
+  );
+  const fiber = takeMacro(
+    fiber100g !== null ? fiber100g * scaleFactor : null,
+    estimated?.fiber,
+    'fiber'
+  );
+  const sugar = takeMacro(
+    sugar100g !== null ? sugar100g * scaleFactor : null,
+    estimated?.sugar,
+    'sugar'
+  );
+  const sodium = takeMacro(
+    sodium100gMg !== null ? sodium100gMg * scaleFactor : null,
+    estimated?.sodium,
+    'sodium',
+    true
+  );
+
+  if (estimatedFields.length > 0) {
+    servingSizeText = `${servingSizeText} · macros estimated from ingredients`;
+  }
+
+  // Run packaged nutrition evaluator using listed or estimated macros
+  const evaluation = evaluatePackaged(
+    {
+      ...product,
+      nutriments: {
+        ...(product.nutriments || {}),
+        'energy-kcal_100g': calories / scaleFactor,
+        'proteins_100g': protein / scaleFactor,
+        'carbohydrates_100g': carbs / scaleFactor,
+        'fat_100g': fat / scaleFactor,
+        'fiber_100g': fiber / scaleFactor,
+        'sugars_100g': sugar / scaleFactor,
+        'sodium_100g': sodium / scaleFactor / 1000,
+      },
+    },
+    profile,
+    calories
+  );
 
   const brandPrefix = product.brands ? `${product.brands.trim()} ` : '';
-  const productName = product.product_name?.trim() || 'Packaged Product';
+  const productName = (product.product_name || product.product_name_en || '').trim() || 'Packaged Product';
   const foodName = `${brandPrefix}${productName}`.trim();
 
   const description = [
@@ -274,7 +523,9 @@ export function mapProductToAnalysis(
     allergens: evaluation.allergens,
     additives: evaluation.additives,
     dietaryWarnings: evaluation.dietaryWarnings,
-    missingFields,
+    missingFields: missingFields.filter((field) => !estimatedFields.includes(field)),
+    estimatedFields,
+    nutritionEstimated: estimatedFields.length > 0,
     isPackaged: true,
   };
 }
@@ -287,7 +538,7 @@ export async function fetchProductByBarcode(
   profile?: Profile | null
 ): Promise<PackagedAnalysis | null> {
   const rawProduct = await fetchRawProductByBarcode(barcode);
-  if (!rawProduct) return null;
+  if (!rawProduct || !hasUsableProductData(rawProduct)) return null;
   return mapProductToAnalysis(rawProduct, profile);
 }
 
@@ -299,22 +550,39 @@ export function mapLabelDataToAnalysis(
   profile?: Profile | null,
   photoUrl?: string
 ): PackagedAnalysis {
-  const missingFields: string[] = [];
-  if (data.calories === null) missingFields.push('calories');
-  if (data.protein === null) missingFields.push('protein');
-  if (data.carbs === null) missingFields.push('carbs');
-  if (data.fat === null) missingFields.push('fat');
-  if (data.fiber === null) missingFields.push('fiber');
-  if (data.sugar === null) missingFields.push('sugar');
-  if (data.sodium === null) missingFields.push('sodium');
+  const servingGrams = data.servingQuantityGrams && data.servingQuantityGrams > 0
+    ? data.servingQuantityGrams
+    : 100;
+  const estimated = data.ingredientsText
+    ? estimateMacrosFromIngredients(data.ingredientsText, servingGrams)
+    : null;
 
-  const calories = data.calories ?? 0;
-  const protein = data.protein ?? 0;
-  const carbs = data.carbs ?? 0;
-  const fat = data.fat ?? 0;
-  const fiber = data.fiber ?? 0;
-  const sugar = data.sugar ?? 0;
-  const sodium = data.sodium ?? 0;
+  const estimatedFields: string[] = [];
+  const take = (listed: number | null, estimateValue: number | undefined, field: string): number => {
+    if (listed !== null && Number.isFinite(listed)) return listed;
+    if (estimateValue !== undefined) {
+      estimatedFields.push(field);
+      return estimateValue;
+    }
+    return 0;
+  };
+
+  const calories = take(data.calories, estimated?.calories, 'calories');
+  const protein = take(data.protein, estimated?.protein, 'protein');
+  const carbs = take(data.carbs, estimated?.carbs, 'carbs');
+  const fat = take(data.fat, estimated?.fat, 'fat');
+  const fiber = take(data.fiber, estimated?.fiber, 'fiber');
+  const sugar = take(data.sugar, estimated?.sugar, 'sugar');
+  const sodium = take(data.sodium, estimated?.sodium, 'sodium');
+
+  const missingFields: string[] = [];
+  if (data.calories === null && !estimatedFields.includes('calories')) missingFields.push('calories');
+  if (data.protein === null && !estimatedFields.includes('protein')) missingFields.push('protein');
+  if (data.carbs === null && !estimatedFields.includes('carbs')) missingFields.push('carbs');
+  if (data.fat === null && !estimatedFields.includes('fat')) missingFields.push('fat');
+  if (data.fiber === null && !estimatedFields.includes('fiber')) missingFields.push('fiber');
+  if (data.sugar === null && !estimatedFields.includes('sugar')) missingFields.push('sugar');
+  if (data.sodium === null && !estimatedFields.includes('sodium')) missingFields.push('sodium');
 
   // Build pseudo packaged product for evaluatePackaged
   const pseudoProduct: PackagedProduct = {
@@ -339,13 +607,16 @@ export function mapLabelDataToAnalysis(
   const evaluation = evaluatePackaged(pseudoProduct, profile, calories);
 
   const brandPrefix = data.brand ? `${data.brand.trim()} ` : '';
-  const rawName = data.productName?.trim() || 'Scanned Packaged Label';
+  const rawName = data.productName?.trim() || (data.ingredientsText ? 'Packaged food from ingredients' : 'Scanned Packaged Label');
   const foodName = `${brandPrefix}${rawName}`.trim();
+  const nutritionEstimated = estimatedFields.length > 0;
 
   const description = [
     data.brand ? `Brand: ${data.brand}` : '',
     data.servingSize ? `Serving: ${data.servingSize}` : '',
-    'Extracted from packaged food label',
+    nutritionEstimated
+      ? 'Approximate macros estimated from the ingredient list (use the printed nutrition panel for exact values)'
+      : 'Extracted from packaged food label',
   ].filter(Boolean).join(' · ');
 
   const substitutions: Array<{ name: string; calories: string; protein?: string; fiber?: string }> = [];
@@ -378,8 +649,8 @@ export function mapLabelDataToAnalysis(
     fiber,
     sugar,
     sodium,
-    servingSize: data.servingSize || '1 serving',
-    confidence: 94,
+    servingSize: data.servingSize || (nutritionEstimated ? `approx ${servingGrams}g (estimated from ingredients)` : '1 serving'),
+    confidence: nutritionEstimated ? 72 : 94,
     healthScore: {
       score: evaluation.score,
       status: evaluation.status,
@@ -395,6 +666,8 @@ export function mapLabelDataToAnalysis(
     additives: evaluation.additives,
     dietaryWarnings: evaluation.dietaryWarnings,
     missingFields,
+    estimatedFields,
+    nutritionEstimated,
     isPackaged: true,
   };
 }
